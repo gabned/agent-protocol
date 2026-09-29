@@ -3,10 +3,33 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
-import {collectLifecycle, explainWithEngine} from '../tools/collect.mjs';
+import {collectLifecycle, explainWithEngine, createGitHubCliReader} from '../tools/collect.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const repository = 'example/synthetic', head = 'a'.repeat(40), base = 'b'.repeat(40);
+test('native reader confines API routes and completes nested review comment pages',async()=>{
+  const calls=[];
+  const reader=await createGitHubCliReader({repository,repositoryId:17,invoke:async args=>{
+    calls.push(args);
+    if(args[0]==='--method') return {id:17};
+    if(args.some(a=>a==='id=thread-one')) return {data:{node:{id:'thread-one',comments:{
+      nodes:[{id:'comment-two',databaseId:2}],pageInfo:{hasNextPage:false,endCursor:null}}}}};
+    return {data:{repository:{databaseId:17,nameWithOwner:repository,pullRequest:{number:4,
+      reviewThreads:{pageInfo:{hasNextPage:false,endCursor:null},nodes:[{id:'thread-one',isResolved:true,
+        comments:{nodes:[{id:'comment-one',databaseId:1}],pageInfo:{hasNextPage:true,endCursor:'next'}}}]}}}}};
+  }});
+  assert.equal((await reader.fetchJson(`https://api.github.com/repos/${repository}`)).id,17);
+  const result=await reader.fetchReviewThreads(repository,4);
+  assert.equal(result.complete,true);
+  assert.deepEqual(result.threads[0].comments.map(c=>c.database_id),[1,2]);
+  const before=calls.length;
+  for(const suffix of ['../other','%2e%2e/other']) {
+    await assert.rejects(()=>reader.fetchJson(`https://api.github.com/repos/${repository}/${suffix}`));
+  }
+  await assert.rejects(()=>reader.fetchJson('https://api.github.com/repos/example/unauthorized'));
+  await assert.rejects(()=>reader.fetchReviewThreads('example/unauthorized',4));
+  assert.equal(calls.length,before);
+});
 function harness() {
   const repo = {full_name:repository, id:17, default_branch:'main'};
   const pr = {number:4, state:'open', head:{sha:head}, base:{sha:base,repo}, commits:1,
@@ -44,6 +67,17 @@ test('complete bounded collection retains raw evidence and never claims qualific
   assert.equal(result.head,head);
   assert.ok(observations.length>10);
   assert.equal(result.ci.complete,true);
+});
+test('provider short review identities are resolved by the authenticated repository API',async()=>{
+  const {options,responses}=harness();
+  responses['/pulls/4'].comments=1;
+  responses['/issues/4/comments?per_page=100&page=1']=[{id:1,user:{id:123,type:'Bot'},body:
+    '<!-- codex-pull-request-review-summary -->\n| **Code Review** | **Completed** | `aaaaaaa` | Manual |\n' +
+    '| **Security Review** | **Completed** | `aaaaaaa` | Manual |'}];
+  responses['/commits/aaaaaaa']={sha:head};
+  const result=await collectLifecycle(options);
+  assert.equal(result.reviewReferences.length,1);
+  assert.equal(result.reviewReferences[0].response.sha,head);
 });
 test('identity, review completeness, pagination and changed head fail closed',async()=>{
   for(const attack of ['identity','threads','pagination','head']) {

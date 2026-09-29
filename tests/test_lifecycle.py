@@ -104,6 +104,75 @@ class PreconditionsTests(unittest.TestCase):
     def evaluate(self, state, request, observation, authority):
         return evaluate(state, request, observation, authority, now=NOW)
 
+    def test_non_execution_requires_exact_quiescent_host_proof_and_retains_history(self):
+        state, request, obs, auth = fixture()
+        auth["operations"].append("RECONCILE_NOT_APPLIED")
+        obs["coordinates"]["AUTHORITY"] = digest(
+            {
+                k: auth[k]
+                for k in ("identity", "principal", "operations", "capabilities", "signer_registry")
+            }
+        )
+        events = []
+        for index, operation in enumerate(["START", "QUALIFY", "INTEGRATE"], 1):
+            request.update(
+                operation=operation,
+                operation_id="recovery-" + operation.lower(),
+                expected_tip=state["tip"],
+            )
+            plan = self.evaluate(state, request, obs, auth)
+            events.append(
+                {
+                    "commit": str(index) * 40,
+                    "parents": [state["tip"]] if state["tip"] else [],
+                    "event": plan["event"],
+                }
+            )
+            state = replay(
+                events,
+                identity=IDENTITY,
+                authenticated_commits={e["commit"]: "owner-a" for e in events},
+            )
+        request.update(
+            operation="RECONCILE_NOT_APPLIED",
+            operation_id="recovery-not-applied",
+            expected_tip=state["tip"],
+            parameters={"grant": "host-refusal"},
+        )
+        proof = {
+            "operation": "RECONCILE_NOT_APPLIED",
+            "identity": IDENTITY,
+            "intent_tip": state["tip"],
+            "intent_operation": "recovery-integrate",
+            "kind": "DEFINITIVELY_REJECTED",
+            "source": "authenticated:api-rejection",
+            "quiescent": True,
+        }
+        for change in ({"kind": "TIMEOUT"}, {"intent_tip": "f" * 40}, {"quiescent": False}):
+            auth["grants"]["host-refusal"] = {**proof, **change}
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.evaluate(state, request, obs, auth)
+        auth["grants"]["host-refusal"] = proof
+        plan = self.evaluate(state, request, obs, auth)
+        events.append({"commit": "4" * 40, "parents": [state["tip"]], "event": plan["event"]})
+        state = replay(
+            events,
+            identity=IDENTITY,
+            authenticated_commits={e["commit"]: "owner-a" for e in events},
+        )
+        self.assertEqual(state["status"], "ACTIVE")
+        self.assertIsNone(state["qualification"])
+        self.assertEqual(len(state["events"]), 4)
+        self.assertEqual(self.evaluate(state, request, obs, auth), plan)
+        request.update(
+            operation="QUALIFY",
+            operation_id="recovery-unchanged",
+            expected_tip=state["tip"],
+            parameters={},
+        )
+        with self.assertRaisesRegex(ValueError, "Unchanged deterministic"):
+            self.evaluate(state, request, obs, auth)
+
     def test_exact_retry_reconciles_before_freshness_or_terminal_state(self):
         state, request, obs, auth = fixture()
         plan = self.evaluate(state, request, obs, auth)

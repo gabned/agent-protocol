@@ -16,6 +16,16 @@ the write is not permission to repeat it. CLOSE requires observed post-merge
 delivery and one next action/location. The same operation ID/request reconciles
 to its existing event even after closure; changed content under that ID fails.
 
+RECONCILE_NOT_APPLIED settles an integration intent only with an independently
+authenticated NOT_DISPATCHED or DEFINITIVELY_REJECTED receipt. The receipt names
+the exact intent commit, operation and workstream and establishes that no request
+remains in flight. An open PR, timeout, elapsed time or repeated error is not that
+proof. The operation retains the intent and receipt, returns to ACTIVE and clears
+qualification. A new integration needs new qualifying evidence; unchanged
+deterministic evidence still fails the anti-loop check. An uncertain dispatch
+stays INTEGRATING until an actual merge or a conclusive non-execution receipt is
+observed. No generic reset or user-supplied success override exists.
+
 INTERRUPT preserves owner and durable recovery material, invalidates qualification
 and records the reason. RESUME verifies restoration from durable material and
 keeps the same owner. HANDOFF requires an interrupted state, exact independent
@@ -23,7 +33,8 @@ grant naming both owners, workstream, journal tip and candidate head, plus retai
 material. It changes only the current owner; the original identity remains.
 The recipient subsequently resumes under their own accepted signing identity.
 ABANDON requires explicit scoped authority and retained material; it cannot conceal
-an uncertain integration. Terminal journals cannot be reopened or reset.
+an uncertain integration. It accepts an open or closed unmerged PR and preserves
+the last candidate identity. Terminal journals cannot be reopened or reset.
 
 Before every write the host rereads the journal, reobserves external preconditions
 and evaluates the same request. The signed event records its expected predecessor

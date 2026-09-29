@@ -15,6 +15,7 @@ from agent_protocol.qualification import (
     normalize_ci,
     policy_decision,
     verify_protocol_candidate,
+    verify_review_activity,
     verify_reviews,
 )
 from agent_protocol.source import legacy
@@ -58,112 +59,165 @@ def inventory():
     }
 
 
-class QualificationTests(unittest.TestCase):
-    def test_protocol_raw_objects_bind_scope_history_identity_ci_and_reviews(self):
-        stamp = "2026-01-01T00:00:00Z"
-        repo = {"full_name": "example/synthetic", "id": 17}
-        head, base, base_tree, head_tree = (c * 40 for c in "abcd")
-        pr = {
-            "number": 4,
-            "head": {"sha": head},
-            "base": {"sha": base, "repo": repo},
-            "state": "open",
-            "draft": False,
-            "mergeable": True,
-            "commits": 1,
-            "changed_files": 1,
-            "review_comments": 0,
+def protocol_fixture():
+    stamp = "2026-01-01T00:00:00Z"
+    repo = {"full_name": "example/synthetic", "id": 17}
+    head, base, base_tree, head_tree = (c * 40 for c in "abcd")
+    pr = {
+        "number": 4,
+        "head": {"sha": head},
+        "base": {"sha": base, "repo": repo},
+        "state": "open",
+        "draft": False,
+        "mergeable": True,
+        "commits": 1,
+        "changed_files": 1,
+        "review_comments": 0,
+    }
+
+    def observed(value):
+        return {"response": value, "observed_at": stamp}
+
+    def tree_record(commit, parents, tree, entries):
+        return {
+            "commit": observed(
+                {"sha": commit, "parents": [{"sha": p} for p in parents], "tree": {"sha": tree}}
+            ),
+            "tree": observed({"sha": tree, "truncated": False, "tree": entries}),
         }
 
-        def observed(value):
-            return {"response": value, "observed_at": stamp}
-
-        def tree_record(commit, parents, tree, entries):
-            return {
-                "commit": observed(
-                    {"sha": commit, "parents": [{"sha": p} for p in parents], "tree": {"sha": tree}}
-                ),
-                "tree": observed({"sha": tree, "truncated": False, "tree": entries}),
-            }
-
-        run = {
-            "id": 1,
-            "repository": repo,
-            "head_sha": head,
-            "run_attempt": 1,
-            "status": "completed",
-            "conclusion": "success",
-            "path": ".github/workflows/ci.yml",
-            "event": "pull_request",
-        }
-        job = {
-            "id": 1,
-            "name": "native",
-            "head_sha": head,
-            "run_id": 1,
-            "status": "completed",
-            "conclusion": "success",
-        }
-        collection = {
-            "schema": "agent-lifecycle-collection/v2",
-            "repository": repo["full_name"],
-            "repository_id": 17,
-            "pr": 4,
-            "head": head,
-            "preflight": {
-                "repo": observed(repo),
-                "default_branch": observed({"commit": {"sha": base}}),
-                "active_pull_request": {
-                    "pr": observed(pr),
-                    "reviews": {"complete": True, "items": []},
-                    "threads": {
-                        "observed_at": stamp,
-                        "status": "OBSERVED",
-                        "response": {"complete": True, "threads": []},
-                    },
+    run = {
+        "id": 1,
+        "repository": repo,
+        "head_sha": head,
+        "run_attempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "path": ".github/workflows/ci.yml",
+        "event": "pull_request",
+    }
+    job = {
+        "id": 1,
+        "name": "native",
+        "head_sha": head,
+        "run_id": 1,
+        "status": "completed",
+        "conclusion": "success",
+    }
+    collection = {
+        "schema": "agent-lifecycle-collection/v2",
+        "repository": repo["full_name"],
+        "repository_id": 17,
+        "pr": 4,
+        "head": head,
+        "preflight": {
+            "repo": observed(repo),
+            "default_branch": observed({"commit": {"sha": base}}),
+            "active_pull_request": {
+                "pr": observed(pr),
+                "reviews": {"complete": True, "items": []},
+                "threads": {
+                    "observed_at": stamp,
+                    "status": "OBSERVED",
+                    "response": {"complete": True, "threads": []},
                 },
             },
-            "reviewComments": [],
-            "files": [{"filename": "protocol.py"}],
-            "commits": [{"sha": head}],
-            "base": tree_record(base, [], base_tree, []),
-            "trees": [
-                tree_record(
-                    head,
-                    [base],
-                    head_tree,
-                    [{"path": "protocol.py", "type": "blob", "mode": "100644", "sha": "e" * 40}],
-                )
-            ],
-            "final": [observed(pr), observed({"commit": {"sha": base}})],
-            "ci": {
-                "schema": "agent-work-ci-history/v1",
-                "complete": True,
-                "repository": repo["full_name"],
-                "head_sha": head,
-                "inventory": [observed({"total_count": 1, "workflow_runs": [run]})],
-                "histories": [
-                    {
-                        "attempt": observed(run),
-                        "jobs": [observed({"total_count": 1, "jobs": [job]})],
-                    }
-                ],
-            },
-        }
-        profile = {
+        },
+        "reviewComments": [],
+        "files": [{"filename": "protocol.py"}],
+        "commits": [{"sha": head}],
+        "base": tree_record(base, [], base_tree, []),
+        "trees": [
+            tree_record(
+                head,
+                [base],
+                head_tree,
+                [{"path": "protocol.py", "type": "blob", "mode": "100644", "sha": "e" * 40}],
+            )
+        ],
+        "final": [observed(pr), observed({"commit": {"sha": base}})],
+        "ci": {
+            "schema": "agent-work-ci-history/v1",
+            "complete": True,
             "repository": repo["full_name"],
-            "repository_id": 17,
+            "head_sha": head,
+            "inventory": [observed({"total_count": 1, "workflow_runs": [run]})],
+            "histories": [
+                {
+                    "attempt": observed(run),
+                    "jobs": [observed({"total_count": 1, "jobs": [job]})],
+                }
+            ],
+        },
+    }
+    profile = {
+        "repository": repo["full_name"],
+        "repository_id": 17,
+        "source_commit": base,
+        "workstream_class": "PROTOCOL",
+        "effects": "NO_PRODUCTION",
+        "paths": {"protocol.py": "100644"},
+        "frozen_paths": [],
+        "reviewers": [],
+        "review_activity": [],
+        "ci": {
             "source_commit": base,
-            "workstream_class": "PROTOCOL",
-            "effects": "NO_PRODUCTION",
-            "paths": {"protocol.py": "100644"},
-            "frozen_paths": [],
-            "reviewers": [],
-            "ci": {
-                "source_commit": base,
-                "required_workflows": [".github/workflows/ci.yml@pull_request"],
-            },
+            "required_workflows": [".github/workflows/ci.yml@pull_request"],
+        },
+    }
+    return collection, profile
+
+
+class QualificationTests(unittest.TestCase):
+    def test_provider_review_must_resolve_to_exact_candidate_with_authenticated_author(self):
+        stamp = "2026-01-01T00:00:00Z"
+        head = "a" * 40
+        body = (
+            "<!-- codex-pull-request-review-summary -->\n"
+            "| **Code Review** | **Completed** | `aaaaaaa` | Manual |\n"
+            "| **Security Review** | **Completed** | `aaaaaaa` | Manual |\n"
+            '<!-- codex-security-review:v1 {"headSha":"' + head + '",'
+            '"repository":"example/synthetic","pullRequestNumber":4,"status":"completed"} -->'
+        )
+        collection = {
+            "repository": "example/synthetic",
+            "pr": 4,
+            "head": head,
+            "preflight": {"active_pull_request": {"pr": {"response": {"comments": 1}}}},
+            "issueComments": [{"id": 1, "user": {"id": 123, "type": "Bot"}, "body": body}],
+            "reviewReferences": [
+                {
+                    "url": "https://api.github.com/repos/example/synthetic/commits/aaaaaaa",
+                    "status": "OBSERVED",
+                    "observed_at": stamp,
+                    "response": {"sha": head},
+                }
+            ],
         }
+        requirements = [
+            {"provider": "CODEX_SUMMARY_V1", "author_id": 123, "kind": kind}
+            for kind in ("CODE", "SECURITY")
+        ]
+        args = {"now": datetime(2026, 1, 1, tzinfo=UTC)}
+        self.assertEqual(verify_review_activity(collection, requirements, **args)["result"], "PASS")
+        for attack in ("author", "head", "unfinished"):
+            changed = copy.deepcopy(collection)
+            if attack == "author":
+                changed["issueComments"][0]["user"]["id"] = 124
+            elif attack == "head":
+                changed["reviewReferences"][0]["response"]["sha"] = "a" * 7 + "b" * 33
+            else:
+                changed["issueComments"][0]["body"] = body.replace("**Completed**", "**Running**")
+            with self.subTest(attack=attack):
+                self.assertNotEqual(
+                    verify_review_activity(changed, requirements, **args)["result"], "PASS"
+                )
+        collection["reviewReferences"] = []
+        with self.assertRaisesRegex(ValueError, "independently resolved"):
+            verify_review_activity(collection, requirements, **args)
+
+    def test_protocol_raw_objects_bind_scope_history_identity_ci_and_reviews(self):
+        collection, profile = protocol_fixture()
         args = {
             "accepted_profile": profile,
             "expected_profile_digest": digest(profile),

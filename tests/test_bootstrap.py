@@ -145,16 +145,12 @@ class GuardTest(unittest.TestCase):
         original_run = subprocess.run
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            registry = json.loads(
-                (ROOT / ".github/agent-protocol/bootstrap.json").read_text()
-            )
+            registry = json.loads((ROOT / ".github/agent-protocol/bootstrap.json").read_text())
             for name in registry["paths"]:
                 target = root / name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text("")
-            (root / ".github/agent-protocol/bootstrap.json").write_text(
-                json.dumps(registry)
-            )
+            (root / ".github/agent-protocol/bootstrap.json").write_text(json.dumps(registry))
             (root / "tests/test_collect.mjs").write_text(
                 "throw new Error('synthetic rejection');\n"
             )
@@ -180,9 +176,7 @@ class GuardTest(unittest.TestCase):
             (root / "pyproject.toml").write_text("")
             registry = root / ".github/agent-protocol/bootstrap.json"
             registry.parent.mkdir(parents=True)
-            registry.write_text(
-                json.dumps({"paths": ["pyproject.toml", "tests/test_collect.mjs"]})
-            )
+            registry.write_text(json.dumps({"paths": ["pyproject.toml", "tests/test_collect.mjs"]}))
             with (
                 patch.object(checker, "ROOT", root),
                 patch.object(checker.subprocess, "run") as run,
@@ -255,9 +249,7 @@ class GuardTest(unittest.TestCase):
                 b"100644 blob " + b"a" * 40 + b"\tdocs/new.md\0",
             ],
         ):
-            result = guard.inspect(
-                "a" * 40, "b" * 40, "WORKSTREAM_CLASS: PROTOCOL", registry
-            )
+            result = guard.inspect("a" * 40, "b" * 40, "WORKSTREAM_CLASS: PROTOCOL", registry)
         self.assertEqual(result["paths"], ["docs/new.md", "docs/old.md"])
         with (
             patch.object(
@@ -288,20 +280,14 @@ class GuardTest(unittest.TestCase):
                 registry_for(["docs/new.md"]),
             )
         with self.assertRaises(ValueError):
-            guard.inspect(
-                "a" * 40, "b" * 40, "WORKSTREAM_CLASS: PRODUCT", registry_for([])
-            )
+            guard.inspect("a" * 40, "b" * 40, "WORKSTREAM_CLASS: PRODUCT", registry_for([]))
 
     def test_real_git_delta_and_candidate_registration_do_not_grant_authority(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
 
             def git(*args):
-                return (
-                    subprocess.check_output(["git", "-C", str(root), *args])
-                    .decode()
-                    .strip()
-                )
+                return subprocess.check_output(["git", "-C", str(root), *args]).decode().strip()
 
             git("init", "-q")
             git("config", "user.name", "Synthetic")
@@ -331,16 +317,11 @@ class GuardTest(unittest.TestCase):
                 )
 
     def test_runtime_has_no_application_dependency(self):
-        registry = json.loads(
-            (ROOT / ".github/agent-protocol/bootstrap.json").read_text()
-        )
+        registry = json.loads((ROOT / ".github/agent-protocol/bootstrap.json").read_text())
         self.assertEqual(registry["repository"], "gabned/agent-protocol")
         self.assertEqual(set(registry["paths"]), set(registry["modes"]))
         self.assertFalse(
-            any(
-                p.startswith(("core/provelume/", "public/", "app/"))
-                for p in registry["paths"]
-            )
+            any(p.startswith(("core/provelume/", "public/", "app/")) for p in registry["paths"])
         )
 
 

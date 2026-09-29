@@ -19,6 +19,20 @@ hide attempts or declare CI inapplicable. Review/thread inventories must be
 complete, with current applicable review requirements fulfilled. A pending review
 is not complete, and a resolved thread does not erase its original finding.
 
+The provider adapter `CODEX_SUMMARY_V1` requires the independently enrolled numeric
+bot identity and separate CODE/SECURITY completion on the exact candidate. It reads
+authenticated issue comments, never PR prose. Abbreviated commit references are
+resolved by GitHub and compared as full SHAs; prefix matching alone cannot pass.
+Security metadata must also name the same repository, PR and full candidate SHA.
+An unknown provider format, ambiguous comment inventory or unavailable resolution
+stays refused/NOT_RUN. Formal review approvals and unresolved-thread checks remain
+separate requirements; a later COMMENTED review cannot erase CHANGES_REQUESTED.
+
+Startup can observe a draft or a candidate whose CI is not yet present, retaining
+NOT_RUN evidence. This does not qualify integration. The public qualifier and host
+use identical scope/history checks; the enrolled host's complete gate inventory
+keeps draft, pending-review and missing-CI results from becoming a successful merge.
+
 Qualify the candidate that will actually merge. Refresh the default and candidate
 head immediately before integration, use a normal expected-head merge and inspect
 the resulting parents/tree and applicable post-merge checks. A PR opening, copied

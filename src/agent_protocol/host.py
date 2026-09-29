@@ -14,10 +14,14 @@ import re
 import subprocess
 import tempfile
 from copy import deepcopy
+from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import quote, unquote
 
-from .ledger import canonical, digest, exact, replay, require, sha
-from .lifecycle import evaluate
+from .ledger import canonical, digest, exact, replay, require, sha, validate_identity
+from .lifecycle import DEPENDENCIES, evaluate
+from .qualification import ci_evidence, normalize_ci, verify_all_reviews, verify_protocol_candidate
+from .source import ROOT, safe_path, verify_installation
 
 
 def same_plan(left, right):
@@ -278,15 +282,21 @@ class ProtocolHost:
     def explain(self, request):
         self.journal.synchronize()
         state = self.journal.read()
-        return evaluate(state, request, self.collect(state["identity"]), self.authority(state))
+        observation = (
+            {}
+            if request["operation_id"] in state["operations"]
+            else self.collect(state["identity"])
+        )
+        return evaluate(state, request, observation, self.authority(state))
 
     def operate(self, request):
         self.journal.synchronize()
         state = self.journal.read()
         request = deepcopy(request)
-        observation, authority = self.collect(state["identity"]), self.authority(state)
-        plan = evaluate(state, request, observation, authority)
         already_applied = request["operation_id"] in state["operations"]
+        observation = {} if already_applied else self.collect(state["identity"])
+        authority = self.authority(state)
+        plan = evaluate(state, request, observation, authority)
 
         def refresh(current):
             return evaluate(
@@ -333,3 +343,410 @@ class ProtocolHost:
             "state": "RECONCILIATION_REQUIRED",
             "next_operation": "RECONCILE",
         }
+
+
+class GitHubCLI:
+    """Supported gh authentication with a closed repository and one merge capability."""
+
+    def __init__(self, repository, *, directory, execute=None):
+        require(re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository), "Invalid repository")
+        self.repository, self.directory = repository, Path(directory).resolve()
+        self.execute = execute or subprocess.run
+
+    def request(self, suffix, *, method="GET", payload=None):
+        require(
+            isinstance(suffix, str)
+            and (suffix == "" or suffix.startswith("/"))
+            and not any(part in {".", ".."} for part in unquote(suffix.split("?")[0]).split("/"))
+            and "\\" not in suffix
+            and "#" not in suffix,
+            "Invalid scoped GitHub route",
+        )
+        require(method in {"GET", "PUT"}, "Unsupported host effect")
+        if method == "PUT":
+            require(
+                re.fullmatch(r"/pulls/[1-9][0-9]*/merge", suffix), "Only normal merge supported"
+            )
+            exact(payload, "sha merge_method", "merge request")
+            sha(payload["sha"])
+            require(payload["merge_method"] == "merge", "Only normal merge supported")
+        args = [
+            "gh",
+            "api",
+            "--hostname",
+            "github.com",
+            "--method",
+            method,
+            "repos/" + self.repository + suffix,
+        ]
+        if payload is not None:
+            args += ["--input", "-"]
+        result = self.execute(
+            args,
+            input=json.dumps(payload) if payload is not None else None,
+            capture_output=True,
+            text=True,
+            cwd=self.directory,
+            timeout=120,
+        )
+        # gh may include diagnostic context. Do not expose auth environment or raw stderr.
+        require(result.returncode == 0, "GitHub operation unavailable; reconcile before retry")
+        return json.loads(result.stdout)
+
+    def account(self):
+        result = self.execute(
+            ["gh", "api", "--hostname", "github.com", "user"],
+            capture_output=True,
+            text=True,
+            cwd=self.directory,
+            timeout=120,
+        )
+        require(result.returncode == 0, "Supported GitHub login required on the operator host")
+        return json.loads(result.stdout)
+
+
+class NativeGitHubHost:
+    """Operator-enrolled native adapter; its binding is never loaded from the candidate.
+
+    The operator supplies an independently approved enrollment outside all candidate
+    checkouts. The enrollment pins an accepted repository profile by commit and blob,
+    plus the existing account, per-workstream authority and public signer registry.
+    It is installation/authorization material, not a checkpoint or a candidate input.
+    All dynamic state remains in the signed per-PR journal.
+    """
+
+    def __init__(self, enrollment, *, api=None, collect_raw=None):
+        exact(
+            enrollment,
+            "schema identity authority account profile_revision profile_path "
+            "profile_blob journal_directory required_ancestor public_signers source_bundle",
+            "host enrollment",
+        )
+        require(enrollment["schema"] == "agent-host-enrollment/v1", "Unknown host enrollment")
+        self.binding = deepcopy(enrollment)
+        self.source_receipt = verify_installation(
+            enrollment["source_bundle"], revision=enrollment["authority"]["pin"]
+        )
+        self.identity = enrollment["identity"]
+        validate_identity(self.identity)
+        require(
+            self.identity["workstream_class"] == "PROTOCOL",
+            "Use the accepted native PRODUCT adapter",
+        )
+        self.api = api or GitHubCLI(
+            self.identity["repository"], directory=enrollment["journal_directory"]
+        )
+        account = self.api.account()
+        require(
+            {"id": account["id"], "login": account["login"]} == enrollment["account"],
+            "Authenticated account differs from independent enrollment",
+        )
+        self.journal = GitJournal(
+            enrollment["journal_directory"],
+            self.identity,
+            enrollment["public_signers"],
+            required_ancestor=enrollment["required_ancestor"],
+        )
+        remotes = self.journal.git("remote", "get-url", "--all", "origin").decode().splitlines()
+        repository = self.identity["repository"]
+        permitted = {f"https://github.com/{repository}.git", f"git@github.com:{repository}.git"}
+        require(
+            len(remotes) == 1 and remotes[0] in permitted,
+            "Journal origin must identify the exact enrolled repository without URL credentials",
+        )
+        push = (
+            self.journal.git("remote", "get-url", "--push", "--all", "origin").decode().splitlines()
+        )
+        require(push == remotes, "Separate journal push target refused")
+        self.profile = self.load_profile()
+        require(
+            set(enrollment["authority"]["policy"]["required_gates"])
+            == {"CI", "NATIVE", "REVIEWS", "EFFECTS", "ANCESTRY", "SOURCE", "AUTHORIZATION"},
+            "Native host requires its complete gate inventory",
+        )
+        self.collect_raw = collect_raw or self.native_collection
+        self.host = ProtocolHost(
+            self.journal, collect=self.observe, authority=self.authority, merge=self.merge
+        )
+
+    def load_profile(self):
+        binding = self.binding
+        revision, path = sha(binding["profile_revision"]), safe_path(binding["profile_path"])
+        repository = self.api.request("")
+        require(
+            (repository["full_name"], repository["id"])
+            == (self.identity["repository"], self.identity["repository_id"]),
+            "Repository identity changed",
+        )
+        branch = self.api.request("/branches/" + quote(repository["default_branch"], safe=""))
+        if branch["commit"]["sha"] != revision:
+            ancestry = self.api.request(
+                "/compare/" + revision + "..." + sha(branch["commit"]["sha"])
+            )
+            require(
+                ancestry["merge_base_commit"]["sha"] == revision and ancestry["status"] == "ahead",
+                "Enrollment profile is not on accepted default ancestry",
+            )
+        record = self.api.request("/contents/" + quote(path, safe="/") + "?ref=" + revision)
+        require(
+            record["sha"] == sha(binding["profile_blob"]) and record["encoding"] == "base64",
+            "Accepted profile blob differs from enrollment",
+        )
+        raw = base64.b64decode("".join(record["content"].split()), validate=True)
+        import hashlib
+
+        require(
+            hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
+            == record["sha"],
+            "Profile bytes differ from Git identity",
+        )
+        profile = json.loads(raw)
+        exact(
+            profile,
+            "schema repository repository_id paths frozen_paths required_workflows "
+            "post_merge_workflows reviewers review_activity runtime effect_conditions",
+            "native host profile",
+        )
+        require(
+            profile["schema"] == "agent-host-profile/v1"
+            and (profile["repository"], profile["repository_id"])
+            == (self.identity["repository"], self.identity["repository_id"]),
+            "Wrong accepted profile",
+        )
+        require(
+            profile["required_workflows"] and profile["post_merge_workflows"],
+            "CI cannot be optional",
+        )
+        self.check_effects(profile)
+        return profile
+
+    def check_effects(self, profile):
+        # Each condition was qualified against real triggers under predecessor
+        # change control. Unknown/inaccessible variables are never read as false.
+        for condition in profile["effect_conditions"]:
+            exact(condition, "repository_variable expected_value", "live effect condition")
+            name = condition["repository_variable"]
+            require(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name), "Invalid variable identity")
+            actual = self.api.request("/actions/variables/" + name)
+            require(
+                actual["name"] == name and actual["value"] == condition["expected_value"],
+                "Live production-trigger condition changed; no write authorized",
+            )
+
+    def authority(self, state):
+        # Exact handoff/non-execution grants are externally authenticated enrollment
+        # updates. The engine checks their identity, tip and allowed delta afresh.
+        require(
+            self.binding["authority"]["identity"] == state["identity"],
+            "Enrollment identity changed",
+        )
+        return deepcopy(self.binding["authority"])
+
+    def native_collection(self, identity):
+        result = subprocess.run(
+            [
+                "node",
+                str(ROOT / "tools/collect.mjs"),
+                "--github",
+                identity["repository"],
+                str(identity["repository_id"]),
+                str(identity["pr"]),
+            ],
+            cwd=self.journal.directory,
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        require(
+            result.returncode == 0, "Complete native collection failed; inspect operator evidence"
+        )
+        return json.loads(result.stdout)["collection"]
+
+    def scope(self):
+        return {
+            "repository": self.identity["repository"],
+            "repository_id": self.identity["repository_id"],
+            "source_commit": self.binding["profile_revision"],
+            "workstream_class": "PROTOCOL",
+            "effects": "NO_PRODUCTION",
+            "paths": self.profile["paths"],
+            "frozen_paths": self.profile["frozen_paths"],
+            "reviewers": self.profile["reviewers"],
+            "review_activity": self.profile["review_activity"],
+            "ci": {
+                "source_commit": self.binding["profile_revision"],
+                "required_workflows": self.profile["required_workflows"],
+            },
+        }
+
+    def observe(self, identity):
+        require(identity == self.identity, "Host identity changed")
+        self.check_effects(self.profile)
+        collection = self.collect_raw(identity)
+        active = collection["preflight"]["active_pull_request"]
+        pr = active["pr"]["response"]
+        require(
+            pr["number"] == identity["pr"]
+            and pr["head"]["ref"] == identity["branch"]
+            and pr["head"]["repo"]["id"] == identity["repository_id"],
+            "Candidate identity changed",
+        )
+        state = self.journal.read()
+        authority = self.authority(state)
+        merged = pr.get("merged") is True
+        require(pr["state"] in {"open", "closed"}, "Unknown PR state")
+        reviews = verify_all_reviews(collection, self.profile)
+        coords = {
+            "HEAD": collection["head"],
+            "BASE": pr["base"]["sha"],
+            "MASTER": collection["final"][1]["response"]["commit"]["sha"],
+            "REVIEWS": reviews["digest"],
+            "PIN": authority["pin"],
+            "POLICY": digest(authority["policy"]),
+            "RUNTIME": digest(self.profile["runtime"]),
+            "REPOSITORY": digest(identity),
+            "PR_STATE": "MERGED" if merged else pr["state"].upper(),
+            "AUTHORITY": digest(
+                {
+                    k: authority[k]
+                    for k in (
+                        "identity",
+                        "principal",
+                        "operations",
+                        "capabilities",
+                        "signer_registry",
+                    )
+                }
+            ),
+        }
+        observation = {
+            "identity": identity,
+            "head": coords["HEAD"],
+            "coordinates": coords,
+            "observed_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "effects": "NO_PRODUCTION",
+            "gates": [],
+            "history": {"journal_tip": state["tip"], "source": "verified-signed-journal"},
+            "material": {
+                "restored": True,
+                "source": "signed-git-journal",
+                "head": coords["HEAD"],
+                "pin": coords["PIN"],
+            },
+            "merge": None,
+            "post_merge": None,
+        }
+        if not merged and pr["state"] == "open":
+            scope = self.scope()
+            checked = verify_protocol_candidate(
+                collection,
+                accepted_profile=scope,
+                expected_profile_digest=digest(scope),
+                observe_unready=True,
+            )
+            results = {
+                "CI": checked["ci"]["result"],
+                "NATIVE": checked["ci"]["result"],
+                "REVIEWS": checked["reviews"]["result"],
+                "EFFECTS": "PASS",
+                "ANCESTRY": "PASS",
+                "SOURCE": "PASS",
+                "AUTHORIZATION": "PASS",
+            }
+            ci_source = {k: v for k, v in checked["ci"]["inventory"].items() if k != "observed_at"}
+            sources = {
+                "CI": ci_source,
+                "NATIVE": ci_source,
+                "REVIEWS": {
+                    "reviews": active["reviews"]["items"],
+                    "threads": active["threads"]["response"],
+                    "activity": reviews["activity"],
+                },
+                "EFFECTS": {
+                    "profile_blob": self.binding["profile_blob"],
+                    "paths": checked["paths"],
+                },
+                "ANCESTRY": {"commits": checked["commits"], "tree": checked["tree"]},
+                "SOURCE": self.source_receipt,
+                "AUTHORIZATION": {"account": self.binding["account"], "authority": authority},
+            }
+            for gate in authority["policy"]["required_gates"]:
+                require(gate in results, "Native gate has no qualified adapter")
+                observation["gates"].append(
+                    {
+                        "id": digest({"gate": gate, "source": sources[gate]}),
+                        "gate": gate,
+                        "dependencies": sorted(DEPENDENCIES[gate]),
+                        "coordinates": {k: coords[k] for k in DEPENDENCIES[gate]},
+                        "result": results[gate],
+                        "source": sources[gate],
+                    }
+                )
+        elif merged:
+            require(
+                state["status"] in {"INTEGRATING", "INTEGRATED", "CLOSED"},
+                "Merge occurred outside the retained lifecycle intent",
+            )
+            actual = self.api.request("/git/commits/" + sha(pr["merge_commit_sha"]))
+            candidate = self.api.request("/git/commits/" + sha(state["head"]))
+            observation["merge"] = {
+                "merge_sha": actual["sha"],
+                "base_sha": state["coordinates"]["BASE"],
+                "head_sha": state["head"],
+                "tree_sha": actual["tree"]["sha"],
+                "parents": [p["sha"] for p in actual["parents"]],
+                "qualified_tree": candidate["tree"]["sha"],
+            }
+            require(collection["postMerge"] is not None, "Post-merge collection missing")
+            policy = {
+                "source_commit": self.binding["profile_revision"],
+                "required_workflows": self.profile["post_merge_workflows"],
+            }
+            times = [row["observed_at"] for row in collection["postMerge"]["inventory"]]
+            require(times, "Post-merge run inventory not observed")
+            inventory = normalize_ci(
+                collection["postMerge"],
+                accepted_policy=policy,
+                observed_at=min(times).split(".")[0].rstrip("Z") + "Z",
+            )
+            if inventory["runs"]:
+                checked = ci_evidence(
+                    inventory,
+                    repository=identity["repository"],
+                    head=actual["sha"],
+                    accepted_policy=policy,
+                )
+                observation["post_merge"] = {
+                    "head": actual["sha"],
+                    "result": "PASS"
+                    if checked["result"] == reviews["result"] == "PASS"
+                    else "FAIL",
+                    "complete": True,
+                    "evidence": [inventory, reviews],
+                }
+            else:
+                observation["post_merge"] = {
+                    "head": actual["sha"],
+                    "result": "NOT_RUN",
+                    "complete": False,
+                    "evidence": [inventory],
+                }
+        return observation
+
+    def merge(self, *, identity, expected_head, expected_base, method):
+        require(identity == self.identity and method == "merge", "Unknown merge authority")
+        self.check_effects(self.profile)
+        pr = self.api.request(f"/pulls/{identity['pr']}")
+        require(
+            pr["state"] == "open"
+            and not pr["draft"]
+            and pr["mergeable"] is True
+            and pr["head"]["sha"] == expected_head
+            and pr["base"]["sha"] == expected_base,
+            "Merge coordinates changed before write",
+        )
+        return self.api.request(
+            f"/pulls/{identity['pr']}/merge",
+            method="PUT",
+            payload={"sha": expected_head, "merge_method": "merge"},
+        )

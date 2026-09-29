@@ -1,14 +1,16 @@
-"""Read-only engine CLI. Authorized host writes use the same typed evaluator."""
+"""Protocol engine CLI; enrolled host operations use the same typed evaluator."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from .audit import reconcile
 from .documents import select
-from .ledger import exact
+from .host import NativeGitHubHost
+from .ledger import exact, require
 from .lifecycle import evaluate, freshness
 from .qualification import ci_evidence, verify_protocol_candidate
 
@@ -37,16 +39,77 @@ def dispatch(command, value):
     raise ValueError("Unsupported engine operation")
 
 
+HOST_COMMANDS = {
+    "start": "START",
+    "refresh": "REFRESH",
+    "interrupt": "INTERRUPT",
+    "resume": "RESUME",
+    "handoff": "HANDOFF",
+    "qualify": "QUALIFY",
+    "integrate": "INTEGRATE",
+    "reconcile": "RECONCILE",
+    "reconcile-not-applied": "RECONCILE_NOT_APPLIED",
+    "close": "CLOSE",
+    "abandon": "ABANDON",
+}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "command",
-        choices=["explain", "freshness", "qualify-ci", "qualify-pr", "documents", "audit"],
+        choices=[
+            "explain",
+            "freshness",
+            "qualify-ci",
+            "qualify-pr",
+            "documents",
+            "audit",
+            "state",
+            *HOST_COMMANDS,
+        ],
+    )
+    parser.add_argument(
+        "--enrollment",
+        type=Path,
+        help="Independently approved operator enrollment, outside candidate checkouts",
     )
     args = parser.parse_args(argv)
     try:
-        value = json.load(sys.stdin)
-        result = dispatch(args.command, value)
+        if args.enrollment is not None:
+            require(
+                args.command in {"explain", "state", *HOST_COMMANDS},
+                "No host effect for this command",
+            )
+            host = NativeGitHubHost(json.loads(args.enrollment.read_text(encoding="utf-8")))
+            if args.command == "state":
+                host.journal.synchronize()
+                state = host.journal.read()
+                result = {
+                    k: state[k]
+                    for k in ("identity", "status", "owner", "tip", "head", "coordinates", "merge")
+                }
+                result["journal_events"] = len(state["events"])
+                result["qualification_result"] = (state["qualification"] or {}).get(
+                    "result", "NOT_RUN"
+                )
+            else:
+                value = json.load(sys.stdin)
+                if args.command == "explain":
+                    result = host.host.explain(value)
+                else:
+                    require(
+                        value["operation"] == HOST_COMMANDS[args.command],
+                        "CLI/request operation mismatch",
+                    )
+                    result = host.host.operate(value)
+        else:
+            require(
+                args.command not in {"state", *HOST_COMMANDS},
+                "Independent operator enrollment required",
+            )
+            value = json.load(sys.stdin)
+            result = dispatch(args.command, value)
         print(json.dumps(result, sort_keys=True))
         return 0
     except (ValueError, KeyError, TypeError, OSError) as error:

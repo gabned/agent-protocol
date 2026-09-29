@@ -7,6 +7,8 @@ and reused verbatim; new repositories do not expand the historical audit scope.
 
 from __future__ import annotations
 
+import json
+import re
 from datetime import UTC, datetime
 
 from .ledger import digest, exact, require, sha
@@ -193,7 +195,109 @@ def verify_reviews(collection, *, required_reviewers, now=None):
     }
 
 
-def verify_protocol_candidate(collection, *, accepted_profile, expected_profile_digest, now=None):
+def verify_review_activity(collection, requirements, *, now=None):
+    """Use authenticated provider comments and GitHub resolution of abbreviated refs.
+
+    An edited PR body is never review evidence. Unknown provider formats fail closed.
+    Short SHAs are resolved independently by GitHub, not merely prefix-compared.
+    """
+    now = now or datetime.now(UTC)
+    comments, evidence = collection["issueComments"], []
+    pr = collection["preflight"]["active_pull_request"]["pr"]["response"]
+    require(
+        len(comments) == pr["comments"] and len({c["id"] for c in comments}) == len(comments),
+        "Incomplete review activity comments",
+    )
+    for rule in requirements:
+        exact(rule, "provider author_id kind", "accepted review activity")
+        require(
+            rule["provider"] == "CODEX_SUMMARY_V1"
+            and type(rule["author_id"]) is int
+            and rule["kind"] in {"CODE", "SECURITY"},
+            "Unknown review provider/requirement",
+        )
+        summaries = [
+            c
+            for c in comments
+            if c["user"]["id"] == rule["author_id"]
+            and c["user"].get("type") == "Bot"
+            and "<!-- codex-pull-request-review-summary -->" in c["body"]
+        ]
+        if len(summaries) != 1:
+            return {
+                "result": "NOT_RUN",
+                "evidence": evidence,
+                "reason": "Provider summary missing or ambiguous",
+            }
+        summary = summaries[0]
+        label = "Code Review" if rule["kind"] == "CODE" else "Security Review"
+        rows = [line for line in summary["body"].splitlines() if "**" + label + "**" in line]
+        if len(rows) != 1 or "**Completed**" not in rows[0]:
+            return {
+                "result": "NOT_RUN",
+                "evidence": evidence,
+                "reason": "Required review not completed",
+            }
+        match = re.search(r"\|\s*`([0-9a-f]{7,40})`\s*\|", rows[0])
+        require(match is not None, "Unknown provider commit identity format")
+        url = f"https://api.github.com/repos/{collection['repository']}/commits/{match[1]}"
+        resolved = [r for r in collection["reviewReferences"] if r["url"] == url]
+        require(
+            len(resolved) == 1 and resolved[0]["status"] == "OBSERVED",
+            "Review reference was not independently resolved",
+        )
+        instant = datetime.fromisoformat(resolved[0]["observed_at"].replace("Z", "+00:00"))
+        require(0 <= (now - instant).total_seconds() <= 900, "Review reference observation stale")
+        if resolved[0]["response"]["sha"] != collection["head"]:
+            return {
+                "result": "NOT_RUN",
+                "evidence": evidence,
+                "reason": "Review targets a previous candidate",
+            }
+        if rule["kind"] == "SECURITY":
+            metadata = re.findall(
+                r"<!-- codex-security-review:v1 (\{[^\n]+\}) -->", summary["body"]
+            )
+            require(len(metadata) == 1, "Security review identity missing")
+            meta = json.loads(metadata[0])
+            require(
+                meta["repository"] == collection["repository"]
+                and meta["pullRequestNumber"] == collection["pr"]
+                and meta["headSha"] == collection["head"]
+                and meta["status"] == "completed",
+                "Security review identity/status differs",
+            )
+        evidence.append(
+            {
+                "kind": rule["kind"],
+                "comment_id": summary["id"],
+                "author_id": rule["author_id"],
+                "head": collection["head"],
+                "summary": summary["body"],
+                "resolved": resolved[0]["response"]["sha"],
+            }
+        )
+    return {"result": "PASS", "evidence": evidence}
+
+
+def verify_all_reviews(collection, profile, *, now=None):
+    reviews = verify_reviews(collection, required_reviewers=profile["reviewers"], now=now)
+    activities = (
+        verify_review_activity(collection, profile["review_activity"], now=now)
+        if profile["review_activity"]
+        else {"result": "PASS", "evidence": []}
+    )
+    return {
+        "result": "PASS" if reviews["result"] == activities["result"] == "PASS" else "FAIL",
+        "digest": digest({"reviews": reviews["digest"], "activity": activities}),
+        "unresolved": reviews["unresolved"],
+        "activity": activities,
+    }
+
+
+def verify_protocol_candidate(
+    collection, *, accepted_profile, expected_profile_digest, now=None, observe_unready=False
+):
     """Bounded Protocol collection gate, selected by accepted local change control.
 
     PRODUCT qualification remains the native accepted policy; this function cannot
@@ -204,7 +308,7 @@ def verify_protocol_candidate(collection, *, accepted_profile, expected_profile_
     exact(
         accepted_profile,
         "repository repository_id source_commit workstream_class effects "
-        "paths frozen_paths ci reviewers",
+        "paths frozen_paths ci reviewers review_activity",
         "accepted Protocol scope",
     )
     profile = accepted_profile
@@ -241,8 +345,9 @@ def verify_protocol_candidate(collection, *, accepted_profile, expected_profile_
         and collection["preflight"]["default_branch"]["response"]["commit"]["sha"] == base,
         "Accepted base/default changed",
     )
+    ready = pr["state"] == "open" and not pr["draft"] and pr["mergeable"] is True
     require(
-        pr["state"] == "open" and not pr["draft"] and pr["mergeable"] is True,
+        pr["state"] == "open" and (ready or observe_unready),
         "Candidate not ready for normal integration",
     )
     now = now or datetime.now(UTC)
@@ -312,7 +417,9 @@ def verify_protocol_candidate(collection, *, accepted_profile, expected_profile_
         p for p in set(original_tree) | set(previous) if original_tree.get(p) != previous.get(p)
     }
     require(endpoint == actual_delta, "Endpoint diff differs from complete candidate trees")
-    reviews = verify_reviews(collection, required_reviewers=profile["reviewers"], now=now)
+    reviews = verify_all_reviews(collection, profile, now=now)
+    if not ready:
+        reviews["result"] = "NOT_RUN"
     require(profile["ci"]["source_commit"] == base, "CI policy is not selected from accepted base")
     inventory_times = [
         datetime.fromisoformat(row["observed_at"].replace("Z", "+00:00"))
@@ -328,13 +435,17 @@ def verify_protocol_candidate(collection, *, accepted_profile, expected_profile_
         accepted_policy=profile["ci"],
         observed_at=min(inventory_times).strftime("%Y-%m-%dT%H:%M:%SZ"),
     )
-    ci = ci_evidence(
-        inventory,
-        repository=profile["repository"],
-        head=collection["head"],
-        accepted_policy=profile["ci"],
-        now=now,
-    )
+    present = {run["workflow"] + "@" + run["event"] for run in inventory["runs"]}
+    if observe_unready and not set(profile["ci"]["required_workflows"]) <= present:
+        ci = {"result": "NOT_RUN", "inventory": inventory}
+    else:
+        ci = ci_evidence(
+            inventory,
+            repository=profile["repository"],
+            head=collection["head"],
+            accepted_policy=profile["ci"],
+            now=now,
+        )
     return {
         "result": "PASS" if reviews["result"] == ci["result"] == "PASS" else "FAIL",
         "base": base,

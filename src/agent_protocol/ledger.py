@@ -54,6 +54,7 @@ OPERATIONS = {
     "QUALIFY",
     "INTEGRATE",
     "RECONCILE",
+    "RECONCILE_NOT_APPLIED",
     "CLOSE",
     "ABANDON",
     "REFRESH",
@@ -237,6 +238,18 @@ def apply(state, event):
         for value in payload.values():
             sha(value)
         state.update(status="INTEGRATED", merge=deepcopy(payload))
+    elif operation == "RECONCILE_NOT_APPLIED":
+        exact(payload, "intent_operation non_execution coordinates", "non-execution reconciliation")
+        prior = state["operations"].get(payload["intent_operation"], {})
+        require(
+            state["status"] == "INTEGRATING"
+            and prior.get("operation") == "INTEGRATE"
+            and payload["non_execution"],
+            "Non-execution must settle the retained integration intent",
+        )
+        state.update(
+            status="ACTIVE", qualification=None, coordinates=deepcopy(payload["coordinates"])
+        )
     elif operation == "CLOSE":
         exact(payload, "post_merge_evidence next_action next_location", "closure")
         require(

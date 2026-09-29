@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import re
 import subprocess
+import tarfile
 from functools import cache
 from pathlib import Path
 
@@ -137,4 +139,65 @@ def verify_files(root, manifest, *, expected_digest, observed_modes):
         "revision": manifest["revision"],
         "files": len(manifest["files"]),
         "authority": "REQUIRES_AUTHENTICATED_RELEASE",
+    }
+
+
+def verify_installation(bundle, *, revision, distribution_root=ROOT, source_root=None):
+    """Compare installed bytes/modes to an independently authenticated release archive.
+
+    Enrollment selects the original release digest. No candidate-supplied hash
+    grants authority. Archive mode validation works on Windows and POSIX alike.
+    """
+    exact(bundle, "archive_path archive_sha256 manifest manifest_digest", "enrolled source bundle")
+    manifest = validate_inventory(bundle["manifest"], bundle["manifest_digest"])
+    require(manifest["revision"] == sha(revision), "Installed source pin differs")
+    archive = Path(bundle["archive_path"])
+    require(
+        hashlib.sha256(archive.read_bytes()).hexdigest() == bundle["archive_sha256"],
+        "Release artifact differs from independently selected digest",
+    )
+    root = Path(distribution_root).resolve()
+    src = Path(source_root).resolve() if source_root else Path(__file__).resolve().parents[1]
+    expected = {row["path"]: row for row in manifest["files"]}
+    with tarfile.open(archive, "r:gz") as source:
+        entries = source.getmembers()
+        require(
+            entries and all(member.isfile() and "/" in member.name for member in entries),
+            "Unsupported archive member",
+        )
+        names = [member.name.split("/", 1)[1] for member in entries]
+        require(
+            len(names) == len(set(names))
+            and set(names) == set(expected) | {"SOURCE-MANIFEST.json"},
+            "Incomplete or unexpected release archive inventory",
+        )
+        for member, name in zip(entries, names, strict=True):
+            safe_path(member.name)
+            data = source.extractfile(member).read()
+            if name == "SOURCE-MANIFEST.json":
+                require(json.loads(data) == manifest, "Embedded release inventory differs")
+                continue
+            row = expected[name]
+            blob = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+            require(
+                member.mode == int(row["mode"][-3:], 8)
+                and hashlib.sha256(data).hexdigest() == row["sha256"]
+                and blob == row["blob"],
+                "Artifact bytes/mode differ",
+            )
+            location = src / name[4:] if name.startswith("src/") else root / name
+            require(
+                not any(p.is_symlink() for p in (location, *location.parents)),
+                "Installed symlink refused",
+            )
+            require(
+                location.is_file() and location.read_bytes() == data,
+                "Installed bytes differ from release",
+            )
+    return {
+        "result": "BYTES_VERIFIED",
+        "revision": revision,
+        "manifest_digest": bundle["manifest_digest"],
+        "archive_sha256": bundle["archive_sha256"],
+        "files": len(expected),
     }

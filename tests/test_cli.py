@@ -16,6 +16,20 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class CLITests(unittest.TestCase):
+    def test_write_commands_cannot_accept_authority_from_request_json(self):
+        env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+        for command in ("start", "integrate", "reconcile-not-applied", "close"):
+            result = subprocess.run(
+                [sys.executable, "-m", "agent_protocol", command],
+                input='{"authority":"candidate-chosen"}',
+                text=True,
+                capture_output=True,
+                env=env,
+            )
+            with self.subTest(command=command):
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("Independent operator enrollment required", result.stderr)
+
     def test_public_cli_and_engine_explain_have_identical_preconditions(self):
         value = json.loads((ROOT / "tests/fixtures/lifecycle.json").read_text())
         value["observation"]["observed_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

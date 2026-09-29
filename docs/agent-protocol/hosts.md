@@ -30,3 +30,58 @@ prerequisite. A stopped machine does not imply live processes. Codespaces creati
 paid resources and account login are distinct from configuration verification;
 their real state must be reported explicitly. An external chat does not gain
 automatic control of a cloud terminal.
+
+## Native GitHub entrypoint
+
+The native Protocol adapter uses the supported `gh` login on an enrolled operator
+host. `node tools/collect.mjs --github OWNER/REPOSITORY REPOSITORY_ID PR_NUMBER`
+performs bounded read-only collection. It checks repository IDs, all review and
+nested thread-comment pages, run attempts/jobs and retained candidate trees. Work
+uses `collectLifecycle` with authenticated connector functions and the same
+`qualify-pr` engine. Collected JSON is evidence input, never write authorization.
+
+`agent-protocol start --enrollment /operator/enrollment.json` reads one typed
+request from standard input. The other write commands are `refresh`, `interrupt`,
+`resume`, `handoff`, `qualify`, `integrate`, `reconcile`, `reconcile-not-applied`,
+`close` and `abandon`. `explain --enrollment ...` evaluates the identical live
+preconditions; `state --enrollment ...` restores and reports the selected journal.
+Without enrollment, `explain` remains an offline engine command and write commands
+refuse input. Requests contain only operation, stable operation ID, expected journal
+tip, expected candidate head and the operation's closed parameter schema.
+
+Enrollment is a separately approved operator installation artifact, outside
+candidate checkouts. It has schema `agent-host-enrollment/v1` and contains:
+
+- `identity`: immutable repository ID, PR, branch, workstream/class and origin owner;
+- `authority`: independently approved principal, operations, unchanged local
+  policy, capabilities, source pin, public signer registry identity and exact grants;
+- `account`: GitHub numeric account ID and login observed by the operator;
+- `profile_revision`, `profile_path`, `profile_blob`: accepted repository profile
+  selected under predecessor change control, never a file from the PR;
+- `journal_directory`, `required_ancestor`, `public_signers`: isolated operator
+  Git directory, independently retained recovery anchor and approved public keys;
+- `source_bundle`: original source archive path/digest and exact release manifest/digest,
+  selected from the authenticated release. Installed bytes and archive modes are
+  checked against this artifact, including Windows and wheel installations.
+
+These fields do not enroll themselves. The authorized native adapter or operator
+establishes their authority before invocation. The package does not generate keys,
+obtain tokens, broaden account permissions or create approval grants. A connector
+without signed-journal host capabilities can collect and explain; it must hand the
+typed operation to an enrolled host and cannot substitute unsigned Git commits.
+
+The accepted `agent-host-profile/v1` defines exact repository identity, registered
+`paths` and modes, `frozen_paths`, required pre/post-merge workflows, reviewers,
+review activity providers, runtime identity and live production-trigger conditions.
+Its introduction/change must pass the predecessor's local gates. The native
+Protocol host requires CI, native CI, reviews, effects, ancestry, source and authority
+evidence. It does not replace PRODUCT qualification: PRODUCT adapters retain their
+accepted local policy and use the shared `ProtocolHost` evaluator/executor boundary.
+
+The only GitHub write in this adapter is a normal expected-head merge of its
+enrolled PR. Journal pushes target the same repository without credentials in URLs.
+Merge intent is durable first; a retry of that intent never sends another merge.
+Live production conditions are checked again immediately before dispatch. Reopening
+a host after integration can read the accepted profile from verified default-branch
+ancestry, while reconciliation checks the exact original merge parents/tree and
+post-merge CI separately. A previous head's CI cannot close the lifecycle.

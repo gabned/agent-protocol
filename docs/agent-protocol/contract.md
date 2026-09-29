@@ -22,7 +22,7 @@ fresh observations and performs authorized writes with expected heads. A missing
 access or 404 is unresolved, not evidence that a repository does not exist.
 
 Operations are START, REFRESH, INTERRUPT, RESUME, HANDOFF, QUALIFY, INTEGRATE,
-RECONCILE, CLOSE and ABANDON. Explain evaluates the same preconditions without a
+RECONCILE, RECONCILE_NOT_APPLIED, CLOSE and ABANDON. Explain evaluates the same preconditions without a
 write. See [lifecycle](lifecycle.md), [qualification](qualification.md) and
 [hosts](hosts.md). Unknown effects, incomplete history, stale dependent evidence,
 unexpected heads and mismatched identities fail closed. Errors remain evidence.

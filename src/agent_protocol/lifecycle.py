@@ -147,10 +147,14 @@ def evaluate(state, request, observation, authority, *, now=None):
     require(operation in authority["operations"], "Host lacks explicit operation authority")
     current = validate_observation(state, observation, authority, now)
     require(request["expected_head"] == observation["head"], "Unexpected remote candidate head")
-    require(
-        current["PR_STATE"] == ("MERGED" if operation in {"RECONCILE", "CLOSE"} else "OPEN"),
-        "Unexpected PR state for operation",
+    allowed_pr_states = (
+        {"MERGED"}
+        if operation in {"RECONCILE", "CLOSE"}
+        else {"OPEN", "CLOSED"}
+        if operation == "ABANDON"
+        else {"OPEN"}
     )
+    require(current["PR_STATE"] in allowed_pr_states, "Unexpected PR state for operation")
     # One preserved policy resolver serves explain and every write path.
     decision = policy_decision(
         authority["policy"],
@@ -176,7 +180,8 @@ def evaluate(state, request, observation, authority, *, now=None):
         payload = {"previous_head": state["head"], "coordinates": current}
     else:
         require(
-            state["coordinates"] == current or operation in {"RECONCILE", "CLOSE"},
+            state["coordinates"] == current
+            or operation in {"RECONCILE", "RECONCILE_NOT_APPLIED", "CLOSE", "ABANDON"},
             "Changed coordinates require typed refresh before continuing",
         )
         if operation == "INTERRUPT":
@@ -264,6 +269,39 @@ def evaluate(state, request, observation, authority, *, now=None):
                 "Actual normal merge differs from qualified candidate",
             )
             payload = {k: merge[k] for k in ("merge_sha", "base_sha", "head_sha", "tree_sha")}
+        elif operation == "RECONCILE_NOT_APPLIED":
+            exact(p, "grant", "non-execution parameters")
+            intent = next(
+                (
+                    row
+                    for row in reversed(state["events"])
+                    if row["event"]["operation"] == "INTEGRATE"
+                ),
+                None,
+            )
+            require(intent is not None, "Integration intent missing")
+            grant = authority["grants"].get(p["grant"])
+            exact(
+                grant,
+                "operation identity intent_tip intent_operation kind source quiescent",
+                "independently authenticated non-execution",
+            )
+            require(
+                grant["operation"] == operation
+                and grant["identity"] == state["identity"]
+                and grant["intent_tip"] == intent["commit"]
+                and grant["intent_operation"] == intent["event"]["operation_id"]
+                and grant["kind"] in {"NOT_DISPATCHED", "DEFINITIVELY_REJECTED"}
+                and grant["source"]
+                and grant["quiescent"] is True
+                and observation["merge"] is None,
+                "An open PR or timeout alone cannot prove non-execution",
+            )
+            payload = {
+                "intent_operation": intent["event"]["operation_id"],
+                "non_execution": deepcopy(grant),
+                "coordinates": current,
+            }
         elif operation == "CLOSE":
             exact(p, "next_action next_location", "closure parameters")
             post = observation["post_merge"]
