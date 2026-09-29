@@ -39,8 +39,9 @@ export async function collectLifecycle({repository, repositoryId, pr, fetchJson,
   if (!/^[0-9a-f]{40}$/.test(head || '')) throw Error('Exact candidate required');
   const evidence = await createEvidenceCollector({repository, fetchJson, persistObservation,
     now, maxPages, cacheSnapshot, expectedCacheSha256, sha256});
-  const ci = await evidence.collectRuns(head);
-  const postMerge = active.pr.response.merged === true
+  const settling = active.pr.response.merged === true;
+  const ci = settling ? null : await evidence.collectRuns(head);
+  const postMerge = settling
     ? await evidence.collectRuns(active.pr.response.merge_commit_sha) : null;
   const prefix = `https://api.github.com/repos/${repository}`;
   const retained = [];
@@ -61,10 +62,10 @@ export async function collectLifecycle({repository, repositoryId, pr, fetchJson,
     }
     throw Error('Pagination limit reached; no partial success');
   }
-  const files = await pages(`/pulls/${pr}/files`, active.pr.response.changed_files);
-  const commits = await pages(`/pulls/${pr}/commits`, active.pr.response.commits);
+  const files = settling ? [] : await pages(`/pulls/${pr}/files`, active.pr.response.changed_files);
+  const commits = settling ? [] : await pages(`/pulls/${pr}/commits`, active.pr.response.commits);
   const reviewComments = await pages(`/pulls/${pr}/comments`, active.pr.response.review_comments);
-  const issueComments = await pages(`/issues/${pr}/comments`, active.pr.response.comments);
+  const issueComments = settling ? [] : await pages(`/issues/${pr}/comments`, active.pr.response.comments);
   const reviewReferences = [];
   const references = new Set();
   for (const comment of issueComments) {
@@ -81,9 +82,9 @@ export async function collectLifecycle({repository, repositoryId, pr, fetchJson,
     const row = {url,response:await fetchJson(url),observed_at:now(),status:'OBSERVED'};
     await persistObservation(row); reviewReferences.push(row);
   }
-  const baseCommit = await evidence.readImmutable('commits', active.pr.response.base.sha);
-  const baseTree = await evidence.readTree(baseCommit.observation.response.tree.sha, true);
-  if (baseTree.observation.response.truncated !== false) throw Error('Incomplete accepted base tree');
+  const baseCommit = settling ? null : await evidence.readImmutable('commits', active.pr.response.base.sha);
+  const baseTree = settling ? null : await evidence.readTree(baseCommit.observation.response.tree.sha, true);
+  if (!settling && baseTree.observation.response.truncated !== false) throw Error('Incomplete accepted base tree');
   const trees = [];
   for (const commit of commits) {
     const object = await evidence.readImmutable('commits', commit.sha);
@@ -100,12 +101,15 @@ export async function collectLifecycle({repository, repositoryId, pr, fetchJson,
   }
   if (observations[0].response.head?.sha !== head || observations[1].response.commit?.sha !== before ||
       observations[0].response.state !== active.pr.response.state ||
+      observations[0].response.merged !== active.pr.response.merged ||
+      observations[0].response.merge_commit_sha !== active.pr.response.merge_commit_sha ||
       observations[0].response.base?.sha !== active.pr.response.base.sha) {
     throw Error('PR or default changed during collection; reconcile before retry');
   }
   return {schema:'agent-lifecycle-collection/v2', repository, repository_id:repositoryId,
     pr, head, preflight, ci, postMerge, files, commits, trees, reviewComments, issueComments, reviewReferences, reviewViewer,
-    base:{commit:baseCommit.observation, tree:baseTree.observation}, retained, final:observations,
+    base:settling ? null : {commit:baseCommit.observation, tree:baseTree.observation},
+    collection_purpose:settling ? 'MERGE_SETTLEMENT' : 'CANDIDATE', retained, final:observations,
     metrics:evidence.metrics(), cache:evidence.snapshot(), result:'COLLECTED_NOT_QUALIFIED'};
 }
 

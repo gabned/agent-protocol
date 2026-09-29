@@ -45,24 +45,36 @@ class SignedJournalTests(unittest.TestCase):
 
         def provider_summary(head):
             return (
-                '<!-- codex-pull-request-review-summary -->\n'
-                f'| **Code Review** | **Completed** | `{head[:7]}` | Manual |\n'
-                f'| **Security Review** | **Completed** | `{head[:7]}` | Manual |\n'
-                '<!-- codex-security-review:v1 ' + json.dumps({
-                    'headSha': head, 'repository': IDENTITY['repository'],
-                    'pullRequestNumber': 4, 'status': 'completed',
-                }) + ' -->'
+                "<!-- codex-pull-request-review-summary -->\n"
+                f"| **Code Review** | **Completed** | `{head[:7]}` | Manual |\n"
+                f"| **Security Review** | **Completed** | `{head[:7]}` | Manual |\n"
+                "<!-- codex-security-review:v1 "
+                + json.dumps(
+                    {
+                        "headSha": head,
+                        "repository": IDENTITY["repository"],
+                        "pullRequestNumber": 4,
+                        "status": "completed",
+                    }
+                )
+                + " -->"
             )
 
         collection["issueComments"] = [
             {"id": 9, "user": {"id": 123, "type": "Bot"}, "body": provider_summary("a" * 40)}
         ]
-        collection["reviewReferences"] = [{
-            "url": f"https://api.github.com/repos/{IDENTITY['repository']}/commits/aaaaaaa",
-            "status": "OBSERVED", "observed_at": stamp, "response": {"sha": "a" * 40},
-        }]
+        collection["reviewReferences"] = [
+            {
+                "url": f"https://api.github.com/repos/{IDENTITY['repository']}/commits/aaaaaaa",
+                "status": "OBSERVED",
+                "observed_at": stamp,
+                "response": {"sha": "a" * 40},
+            }
+        ]
         collection["reviewViewer"] = {
-            "url": "https://api.github.com/user", "status": "OBSERVED", "observed_at": stamp,
+            "url": "https://api.github.com/user",
+            "status": "OBSERVED",
+            "observed_at": stamp,
             "response": {"id": 19, "login": "reviewer"},
         }
         collection["preflight"]["active_pull_request"]["reviews"]["items"] = [
@@ -188,7 +200,7 @@ class SignedJournalTests(unittest.TestCase):
                 "head": "a" * 40,
                 "coordinates": first["coordinates"],
                 "tip": "c" * 40,
-            }
+            },
         )
         self.assertEqual(native.merge(**args)["state"], "MERGED_RECONCILIATION_REQUIRED")
         self.assertEqual(mutations[0]["number"], 4)
@@ -282,6 +294,11 @@ class SignedJournalTests(unittest.TestCase):
         collection["trees"][0]["commit"]["response"]["parents"] = []
         original_collect = native.collect_raw
         native.collect_raw = lambda identity: self.fail("Recovery must not collect reviews or CI")
+        enabled[0] = True
+        before_recovery_reads = len(calls)
+        native.api.request = lambda suffix: (
+            {"commit": {"sha": "7" * 40}} if suffix == "/branches/main" else api(suffix)
+        )
         host = ProtocolHost(
             native.journal,
             collect=native.observe,
@@ -292,20 +309,38 @@ class SignedJournalTests(unittest.TestCase):
         plan = host.explain(request)
         self.assertEqual(plan["event"]["payload"]["intent_head"], "a" * 40)
         self.assertEqual(plan["event"]["expected_head"], "f" * 40)
-        self.assertTrue(all(
-            not any(part in suffix for part in ("reviews", "comments", "actions/runs"))
-            for suffix, _ in calls
-        ))
+        self.assertEqual(plan["event"]["payload"]["coordinates"]["MASTER"], "7" * 40)
+        native.api.request = api
+        self.assertTrue(
+            all(
+                not any(part in suffix for part in ("reviews", "comments", "actions/runs"))
+                for suffix, _ in calls
+            )
+        )
+        self.assertFalse(
+            any("/actions/variables/" in suffix for suffix, _ in calls[before_recovery_reads:])
+        )
+        # A fresh host can load the accepted profile even when the live variable
+        # changed. Only candidate-effect operations need that condition.
+        native.load_profile()
         native.collect_raw = original_collect
+        with self.assertRaisesRegex(ValueError, "production-trigger"):
+            native.observe(IDENTITY)
+        enabled[0] = False
 
         # The real post-merge native collector may run in different seconds.
         collection["head"] = pr["head"]["sha"] = "9" * 40
         pr.update(merged=True, state="closed", body=original_body)
+        enabled[0] = True  # Current trigger configuration cannot block journal-only settlement.
         collection["issueComments"][0]["body"] = provider_summary("9" * 40)
         collection["reviewReferences"] = []  # Old mutable provider summary is no longer available.
         collection["preflight"]["active_pull_request"]["reviews"]["items"].append(
-            {"id": 2, "user": {"login": "reviewer"},
-             "state": "CHANGES_REQUESTED", "commit_id": "9" * 40}
+            {
+                "id": 2,
+                "user": {"login": "reviewer"},
+                "state": "CHANGES_REQUESTED",
+                "commit_id": "9" * 40,
+            }
         )
         collection["postMerge"] = copy.deepcopy(collection["ci"])
         post = collection["postMerge"]

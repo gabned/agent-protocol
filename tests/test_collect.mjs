@@ -78,6 +78,25 @@ test('review visibility records only the authenticated collector account',async(
   options.fetchViewer=async()=>({login:'unproved'});
   await assert.rejects(()=>collectLifecycle(options),/viewer unavailable/);
 });
+test('merged settlement does not require unrelated source history or newer-head CI',async()=>{
+  const {options,responses}=harness();
+  const merge='e'.repeat(40);
+  Object.assign(responses['/pulls/4'],{merged:true,state:'closed',merge_commit_sha:merge,changed_files:100000,commits:100000});
+  responses[`/actions/runs?head_sha=${merge}&per_page=100&page=1`]={total_count:0,workflow_runs:[]};
+  for(const path of Object.keys(responses)) {
+    if(path.startsWith('/git/') || path.includes(`/actions/runs?head_sha=${head}`) ||
+       path.startsWith('/pulls/4/files') || path.startsWith('/pulls/4/commits') ||
+       path.startsWith('/issues/4/comments')) delete responses[path];
+  }
+  const result=await collectLifecycle(options);
+  assert.equal(result.collection_purpose,'MERGE_SETTLEMENT');
+  assert.equal(result.ci,null);
+  assert.equal(result.base,null);
+  assert.deepEqual(result.trees,[]);
+  assert.equal(result.postMerge.head_sha,merge);
+  options.fetchReviewThreads=async()=>({threads:[]});
+  await assert.rejects(()=>collectLifecycle(options),/Complete reviews/);
+});
 test('native viewer uses the same bound read transport without a user-selected route',async()=>{
   const calls=[];
   const reader=await createGitHubCliReader({repository,repositoryId:17,

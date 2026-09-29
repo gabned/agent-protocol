@@ -28,6 +28,11 @@ for a later source head cannot replace that historical proof. Fresh complete thr
 and review inventories still reject unresolved threads and changes requested on the
 integrated candidate. Historical qualification is never rerun against mutable PR
 prose, relabeled or used to qualify the newer head.
+The merged collector omits newer-head CI, source-file/commit trees and mutable
+provider summaries. Its fresh complete review/thread inventory, actual merge
+identity and post-merge CI remain mandatory. Live production-trigger variables
+gate candidate operations and merge dispatch; they do not block journal-only
+settlement of an already observed merge.
 
 RECONCILE_NOT_APPLIED settles an integration intent only with an independently
 authenticated NOT_DISPATCHED or DEFINITIVELY_REJECTED receipt. The receipt names
@@ -51,6 +56,10 @@ This route emits no qualification evidence and cannot integrate the candidate.
 Its raw collection reads only repository identity, PR identity/state/head and the
 default branch, with a final PR comparison. Review/thread pagination, CI access
 and candidate source traversal are absent from this typed recovery route.
+Live production-trigger variables are also irrelevant to these journal-only
+operations. A fresh host can load the independently accepted profile without
+reading those variables; ordinary candidate observation and integration still
+require every live effect condition. Recovery grants do not acquire deploy rights.
 
 INTERRUPT preserves owner and durable recovery material, invalidates qualification
 and records the reason. RESUME verifies restoration from durable material and

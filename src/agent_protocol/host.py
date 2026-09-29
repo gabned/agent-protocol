@@ -668,7 +668,6 @@ class NativeGitHubHost:
             profile["required_workflows"] and profile["post_merge_workflows"],
             "CI cannot be optional",
         )
-        self.check_effects(profile)
         return profile
 
     def check_effects(self, profile):
@@ -744,9 +743,9 @@ class NativeGitHubHost:
             == (identity["repository"], identity["repository_id"])
             and pr["head"] == final_pr["head"]
             and pr["base"] == final_pr["base"]
+            and pr["number"] == final_pr["number"] == identity["pr"]
             and pr["state"] == final_pr["state"]
-            and pr.get("merged") == final_pr.get("merged")
-            and pr["base"]["sha"] == branch["commit"]["sha"],
+            and pr.get("merged") == final_pr.get("merged"),
             "Recovery identity/default changed during collection",
         )
         return {
@@ -759,7 +758,6 @@ class NativeGitHubHost:
     def observe(self, identity, *, recovery=False):
         require(identity == self.identity, "Host identity changed")
         self.api.assert_account()
-        self.check_effects(self.profile)
         collection = self.recovery_collection(identity) if recovery else self.collect_raw(identity)
         active = collection["preflight"]["active_pull_request"]
         pr = active["pr"]["response"]
@@ -772,6 +770,8 @@ class NativeGitHubHost:
         state = self.journal.read()
         authority = self.authority(state)
         merged = pr.get("merged") is True
+        if not recovery and not merged:
+            self.check_effects(self.profile)
         require(pr["state"] in {"open", "closed"}, "Unknown PR state")
         require(
             pr["head"]["sha"] == collection["head"]
