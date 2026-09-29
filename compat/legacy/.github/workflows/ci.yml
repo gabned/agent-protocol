@@ -1,0 +1,494 @@
+name: Public repository CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+# Superseded PR code runs have no publication authority. Keep trusted-base and
+# default-branch runs intact; every current head still completes the same checks.
+concurrency:
+  group: public-ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  clean-room:
+    name: Clean-room and repository hygiene
+    if: github.event_name != 'pull_request_target'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Reject runtime secrets and private reference artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tracked_env="$({ git ls-files | grep -E '(^|/)\.env($|\.)' | grep -vE '(^|/)\.env\.example$'; } || true)"
+          if [ -n "$tracked_env" ]; then
+            echo '::error::Runtime .env files are tracked.'
+            printf '%s\n' "$tracked_env"
+            exit 1
+          fi
+
+          forbidden_paths="$({ git ls-files | grep -Ei '(^|/)(\.nexus-analysis|Nexus-private|private-reference|Inbox)(/|$)'; } || true)"
+          if [ -n "$forbidden_paths" ]; then
+            echo '::error::Private reference-instance material is tracked.'
+            printf '%s\n' "$forbidden_paths"
+            exit 1
+          fi
+
+          required=(README.md LICENSE COMMERCIAL-LICENSE.md docs/clean-room.md docs/architecture/core-instance-boundary.md)
+          for path in "${required[@]}"; do
+            test -s "$path" || { echo "::error file=$path::Missing required public boundary file."; exit 1; }
+          done
+
+      - name: Reject obvious credential files
+        shell: bash
+        run: |
+          set -euo pipefail
+          suspicious="$({ git ls-files | grep -Ei '(^|/)(id_rsa|id_ed25519|credentials\.json|service-account.*\.json|.*\.(p12|pfx|key|pem))$'; } || true)"
+          if [ -n "$suspicious" ]; then
+            echo '::error::Potential credential material is tracked.'
+            printf '%s\n' "$suspicious"
+            exit 1
+          fi
+
+      - name: Validate Agent Protocol v1.2 through v1.4.2 contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e AGENT_STATUS.md || {
+            echo '::error::Core ownership must remain pull-request-local.'
+            exit 1
+          }
+          mode="$(git ls-files -s -- tools/agent_protocol.py | awk '{print $1}')"
+          if [ "$mode" != '100755' ]; then
+            echo "::error file=tools/agent_protocol.py::Expected Git mode 100755, observed ${mode:-missing}."
+            exit 1
+          fi
+          campaign_mode="$(git ls-files -s -- tools/agent_protocol_v1_4.py | awk '{print $1}')"
+          if [ "$campaign_mode" != '100755' ]; then
+            echo "::error file=tools/agent_protocol_v1_4.py::Expected Git mode 100755, observed ${campaign_mode:-missing}."
+            exit 1
+          fi
+          continuation_mode="$(git ls-files -s -- tools/agent_protocol_v1_4_1.py | awk '{print $1}')"
+          if [ "$continuation_mode" != '100755' ]; then
+            echo "::error file=tools/agent_protocol_v1_4_1.py::Expected Git mode 100755, observed ${continuation_mode:-missing}."
+            exit 1
+          fi
+          git check-ignore -q .agent/effect-report.json
+          test "$(git ls-files -s -- tools/agent_protocol_v1_4_2.py | awk '{print $1}')" = '100755'
+          test "$(git ls-files -s -- tools/agent_protocol_v1_4_2_ops.py | awk '{print $1}')" = '100644'
+          python tools/agent_protocol.py self-test
+          python tools/agent_protocol_v1_4.py self-test
+          python tools/agent_protocol_v1_4_1.py self-test
+          python tools/agent_protocol_v1_4_2.py self-test
+          python tools/agent_protocol_v1_4_1.py validate-conformance \
+            .github/agent-protocol/conformance-v1.4.1.json
+          if grep -Eq '^(import|from) (requests|httpx|urllib|socket)([ .]|$)' \
+            tools/agent_protocol.py tools/agent_protocol_v1_4.py \
+            tools/agent_protocol_v1_4_1.py tools/agent_protocol_v1_4_2.py \
+            tools/agent_protocol_v1_4_2_ops.py; then
+            echo '::error::Agent Protocol validation must remain offline and connector-input-only.'
+            exit 1
+          fi
+          # Only the canonical synchronizer may read local Git via fixed commands.
+          if grep -Eq '^(import|from) subprocess([ .]|$)' \
+            tools/agent_protocol.py tools/agent_protocol_v1_4.py \
+            tools/agent_protocol_v1_4_1.py tools/agent_protocol_v1_4_2.py; then
+            echo '::error::Pure Protocol validators must not execute subprocesses.'
+            exit 1
+          fi
+
+  agent-change-control:
+    name: Agent change control (trusted base)
+    if: github.event_name == 'pull_request_target'
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      REPOSITORY: ${{ github.repository }}
+
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Evaluate the untrusted head with the trusted base guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$REPOSITORY" = 'gabned/provelume'
+          git init .
+          git remote add origin "https://github.com/${REPOSITORY}.git"
+          git -c http.extraheader= fetch --no-tags --depth=1 origin "$BASE_SHA"
+          git checkout --detach "$BASE_SHA"
+          git -c http.extraheader= fetch --no-tags --depth=1 origin \
+            "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr-head"
+          observed_head="$(git rev-parse refs/remotes/origin/pr-head)"
+          test "$observed_head" = "$HEAD_SHA"
+          mkdir -p .agent
+          git diff --name-status -M -z "$BASE_SHA" "$HEAD_SHA" > .agent/name-status.z
+          curl --fail --silent --show-error --location \
+            "${GITHUB_API_URL}/repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
+            > .agent/current-pr.json
+          python tools/agent_protocol.py change-control \
+            --event "$GITHUB_EVENT_PATH" \
+            --current-pr .agent/current-pr.json \
+            --name-status .agent/name-status.z \
+            --expected-base-sha "$BASE_SHA" \
+            --expected-head-sha "$HEAD_SHA" \
+            --complete \
+            --output .agent/change-control.json
+
+  core-tests:
+    name: Core tests (${{ matrix.os }})
+    if: github.event_name != 'pull_request_target'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package and development checks
+        run: python -m pip install -e ".[dev]"
+
+      - name: Lint
+        run: python -m ruff check core tests scripts tools packaging
+
+      - name: Test
+        run: python -m pytest -q
+
+  windows-shards:
+    name: Windows Core execution (${{ matrix.group }})
+    if: github.event_name != 'pull_request_target'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [0, 1]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install package and development checks
+        run: python -m pip install -e ".[dev]"
+      - name: Lint
+        run: python -m ruff check core tests scripts tools packaging
+      - name: Execute two of four Windows shards within the unchanged deadline
+        run: >-
+          python tools/agent_protocol_work_check.py windows-group
+          --root "${{ github.workspace }}"
+          --output "${{ runner.temp }}/windows-core-${{ matrix.group }}"
+          --group ${{ matrix.group }} --commit "${{ github.sha }}"
+          --run-id "${{ github.run_id }}" --run-attempt "${{ github.run_attempt }}"
+          --event "${{ github.event_name }}"
+      - name: Retain exact-source Windows execution evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: windows-core-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.group }}
+          path: |
+            ${{ runner.temp }}/windows-core-${{ matrix.group }}/*.json
+            ${{ runner.temp }}/windows-core-${{ matrix.group }}/*.log
+            ${{ runner.temp }}/windows-core-${{ matrix.group }}/shard-*/*.json
+            ${{ runner.temp }}/windows-core-${{ matrix.group }}/shard-*/*.log
+          if-no-files-found: error
+          retention-days: 14
+
+  windows-tests:
+    name: Core tests (windows-latest)
+    if: ${{ always() && github.event_name != 'pull_request_target' }}
+    needs: windows-shards
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Download this run and attempt's Windows evidence
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: windows-core-${{ github.run_id }}-${{ github.run_attempt }}-*
+          path: ${{ runner.temp }}/windows-core-evidence
+          merge-multiple: true
+      - name: Require complete disjoint Windows execution on the exact source
+        if: always()
+        run: >-
+          python tools/agent_protocol_work_check.py windows-verify
+          --root "${{ github.workspace }}"
+          --output "${{ runner.temp }}/windows-core-evidence"
+          --groups-result "${{ needs.windows-shards.result }}"
+          --commit "${{ github.sha }}" --run-id "${{ github.run_id }}"
+          --run-attempt "${{ github.run_attempt }}" --event "${{ github.event_name }}"
+
+  windows-installer:
+    name: Windows preview install and uninstall
+    if: github.event_name != 'pull_request_target'
+    runs-on: windows-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up target Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements-build.txt
+            requirements-release.txt
+            build-lock/windows-py312-x86_64.requirements.txt
+
+      - name: Install source and deterministic build tooling
+        run: python -m pip install -e ".[dev]" -r requirements-release.txt
+
+      - name: Build development-identity candidate wheel
+        shell: pwsh
+        run: |
+          $epoch = git show -s --format=%ct $env:GITHUB_SHA
+          $env:SOURCE_DATE_EPOCH = $epoch
+          "SOURCE_DATE_EPOCH=$epoch" | Out-File -FilePath $env:GITHUB_ENV -Append
+          python scripts/deterministic_build.py `
+            --commit $env:GITHUB_SHA `
+            --output-dir "$env:RUNNER_TEMP\provelume-windows-candidate" `
+            --evidence "$env:RUNNER_TEMP\provelume-windows-build.json" `
+            --channel development
+
+      - name: Build frozen launcher and per-user installer
+        shell: pwsh
+        run: |
+          $version = python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
+          $wheel = Get-ChildItem "$env:RUNNER_TEMP\provelume-windows-candidate\*.whl" | Select-Object -First 1
+          ./scripts/build_windows_installer.ps1 `
+            -CandidateWheel $wheel.FullName `
+            -OutputDirectory "$env:RUNNER_TEMP\provelume-windows-output" `
+            -Version $version `
+            -Tag "v$version" `
+            -Channel development `
+            -Commit $env:GITHUB_SHA
+
+      - name: Exercise install, identity, Instance preservation and uninstall
+        shell: pwsh
+        run: |
+          $version = python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
+          ./scripts/test_windows_installer.ps1 `
+            -Installer "$env:RUNNER_TEMP\provelume-windows-output\Provelume-Setup-$version-x64.exe" `
+            -InstallDirectory "$env:RUNNER_TEMP\Installed Provelume" `
+            -InstanceDirectory "$env:RUNNER_TEMP\Portable Provelume Instance" `
+            -ExpectedVersion $version `
+            -ExpectedCommit $env:GITHUB_SHA `
+            -ExpectedChannel development
+
+      - name: Upload Windows preview evidence
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: provelume-windows-preview-${{ github.run_id }}
+          path: ${{ runner.temp }}/provelume-windows-output/
+          if-no-files-found: error
+          retention-days: 14
+
+  release-foundation:
+    name: Deterministic release dry run
+    if: github.event_name != 'pull_request_target'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12.14"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements-release.txt
+
+      - name: Derive reproducible source timestamp
+        shell: bash
+        run: |
+          set -euo pipefail
+          epoch="$(git show -s --format=%ct "$GITHUB_SHA")"
+          echo "SOURCE_DATE_EPOCH=$epoch" >> "$GITHUB_ENV"
+
+      - name: Install release tooling
+        run: python -m pip install -e ".[dev]" -r requirements-release.txt
+
+      - name: Build and compare independent source copies
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist release .release-runtime installed-build-info.json
+          python scripts/deterministic_build.py \
+            --source . \
+            --output-dir dist \
+            --evidence release/build-determinism.json \
+            --commit "$GITHUB_SHA"
+
+      - name: Install wheel and verify embedded development identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv .release-runtime
+          .release-runtime/bin/python -m pip install --upgrade pip
+          .release-runtime/bin/python -m pip install dist/*.whl
+          .release-runtime/bin/provelume --help >/dev/null
+          .release-runtime/bin/provelume build-info > installed-build-info.json
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          value = json.loads(Path('installed-build-info.json').read_text())
+          assert value['identity_status'] == 'development_build'
+          assert value['metadata_present'] is True
+          assert value['source_repository'] == 'gabned/provelume'
+          assert value['commit'] == os.environ['GITHUB_SHA']
+          assert value['tag'] is None
+          assert value['channel'] == 'development'
+          assert value['source_date_epoch'] == int(os.environ['SOURCE_DATE_EPOCH'])
+          assert value['official'] is False
+          assert value['verification']['status'] == 'not_performed'
+          assert value['verification']['network_used'] is False
+          PY
+          rm installed-build-info.json
+
+      - name: Generate and validate release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(python - <<'PY'
+          import tomllib
+          with open('pyproject.toml', 'rb') as handle:
+              print(tomllib.load(handle)['project']['version'])
+          PY
+          )"
+          cyclonedx-py environment \
+            --output-reproducible \
+            --output-format JSON \
+            --spec-version 1.6 \
+            --pyproject pyproject.toml \
+            --mc-type application \
+            --output-file "release/provelume-${VERSION}.cdx.json" \
+            .release-runtime/bin/python
+          export SBOM_PATH="release/provelume-${VERSION}.cdx.json"
+          export SBOM_IDENTITY="https://github.com/gabned/provelume/tree/${GITHUB_SHA}#v${VERSION}"
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import uuid
+          from pathlib import Path
+
+          path = Path(os.environ["SBOM_PATH"])
+          sbom = json.loads(path.read_text(encoding="utf-8"))
+          if sbom.get("bomFormat") != "CycloneDX" or not sbom.get("specVersion"):
+              raise SystemExit("cyclonedx-py did not produce a CycloneDX JSON BOM")
+          sbom.pop("serialNumber", None)
+          canonical = json.dumps(
+              sbom, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+          ).encode("utf-8")
+          fingerprint = hashlib.sha256(canonical).hexdigest()
+          serial = uuid.uuid5(
+              uuid.NAMESPACE_URL,
+              f'{os.environ["SBOM_IDENTITY"]}:{fingerprint}',
+          )
+          sbom["serialNumber"] = f"urn:uuid:{serial}"
+          path.write_text(
+              json.dumps(sbom, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          cp dist/*.whl dist/*.tar.gz release/
+          cp LICENSE COMMERCIAL-LICENSE.md THIRD_PARTY_NOTICES.md release/
+          export PROVELUME_BUILD_TIMESTAMP="2026-01-01T00:00:00+00:00"
+          python scripts/release_manifest.py \
+            --version "$VERSION" \
+            --tag "v${VERSION}" \
+            --commit "$GITHUB_SHA" \
+            --channel development \
+            --artifact release/*.whl \
+            --artifact release/*.tar.gz \
+            --artifact release/LICENSE \
+            --artifact release/COMMERCIAL-LICENSE.md \
+            --artifact release/THIRD_PARTY_NOTICES.md \
+            --artifact release/build-determinism.json \
+            --sbom "release/provelume-${VERSION}.cdx.json" \
+            --manifest release/release-manifest.json \
+            --checksums release/SHA256SUMS
+          python -m json.tool release/release-manifest.json >/dev/null
+          python -m json.tool "release/provelume-${VERSION}.cdx.json" >/dev/null
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(Path('release/release-manifest.json').read_text())
+          evidence = json.loads(Path('release/build-determinism.json').read_text())
+          sbom = json.loads(Path(f'release/provelume-{manifest["version"]}.cdx.json').read_text())
+          assert manifest['source_repository'] == 'gabned/provelume'
+          assert manifest['channel'] == 'development'
+          assert len(manifest['artifacts']) >= 6
+          assert sbom['bomFormat'] == 'CycloneDX'
+          assert sbom['specVersion'] == '1.6'
+          assert sbom['serialNumber'].startswith('urn:uuid:')
+          assert evidence['assurance'] == 'same-source-same-environment-byte-identical'
+          assert evidence['full_release_reproducibility_claimed'] is False
+          assert all(row['byte_identical'] for row in evidence['artifacts'])
+          assert Path('release/SHA256SUMS').stat().st_size > 0
+          PY

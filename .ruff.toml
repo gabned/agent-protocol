@@ -1,0 +1,9 @@
+target-version = "py312"
+line-length = 100
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+# tools retains its predecessor first-party classification after relocation.
+[lint.isort]
+known-first-party = ["provelume", "tools"]
