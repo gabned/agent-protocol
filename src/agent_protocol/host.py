@@ -973,7 +973,6 @@ class NativeGitHubHost:
             all(gate["result"] == "PASS" for gate in observed["gates"]),
             "Qualification no longer complete at merge boundary",
         )
-        self.check_effects(self.profile)
         self.journal.synchronize()
         current = self.journal.read()
         require(
@@ -983,4 +982,7 @@ class NativeGitHubHost:
             and current["coordinates"] == state["coordinates"],
             "Remote integration intent changed before dispatch",
         )
+        # Synchronization can wait on a remote transport. Reobserve mutable
+        # production conditions after it, at the final effect boundary.
+        self.check_effects(self.profile)
         return self.api.merge_pull_request(number=identity["pr"], expected_head=expected_head)

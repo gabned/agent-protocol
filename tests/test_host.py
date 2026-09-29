@@ -222,6 +222,21 @@ class SignedJournalTests(unittest.TestCase):
             native.merge(**args)
         self.assertEqual(len(mutations), count)
         native.journal = original_journal
+        synchronized.clear()
+
+        def change_effect_during_sync():
+            synchronized.append(True)
+            if len(synchronized) == 2:
+                enabled[0] = True
+
+        native.journal = SimpleNamespace(
+            read=original_journal.read, synchronize=change_effect_during_sync
+        )
+        with self.assertRaisesRegex(ValueError, "production-trigger"):
+            native.merge(**args)
+        self.assertEqual(len(mutations), count)
+        enabled[0] = False
+        native.journal = original_journal
         native.api.request = lambda suffix: (
             {"commit": {"sha": "0" * 40}, "protected": True}
             if suffix == "/branches/main"
