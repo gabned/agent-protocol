@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -112,6 +113,18 @@ def main(argv=None):
             result = dispatch(args.command, value)
         print(json.dumps(result, sort_keys=True))
         return 0
+    except subprocess.SubprocessError:
+        print(
+            json.dumps(
+                {
+                    "result": "REFUSED",
+                    "reason": "Host subprocess failed or timed out; reconcile before retry",
+                    "reconciliation_required": True,
+                }
+            ),
+            file=sys.stderr,
+        )
+        return 2
     except (ValueError, KeyError, TypeError, OSError) as error:
         print(json.dumps({"result": "REFUSED", "reason": str(error)}), file=sys.stderr)
         return 2

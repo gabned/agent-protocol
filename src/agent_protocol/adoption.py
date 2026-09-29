@@ -23,9 +23,37 @@ def plan(
     accepted_manifest_digest,
     accepted_profile_digest,
     previous_files,
+    accepted_previous_files_digest,
+    observed_modes,
 ):
     validate_inventory(manifest, accepted_manifest_digest)
     require(digest(profile) == accepted_profile_digest, "Local adoption profile not accepted")
+    require(
+        digest(previous_files) == accepted_previous_files_digest,
+        "Previous managed inventory differs from independently retained state",
+    )
+    require(
+        isinstance(previous_files, dict) and isinstance(observed_modes, dict),
+        "Complete prior managed files and observed Git modes required",
+    )
+    for name, previous in previous_files.items():
+        safe_path(name)
+        exact(previous, "sha256 mode", "previous managed file")
+        require(previous["mode"] in {"100644", "100755"}, "Unsafe previous mode")
+        require(
+            isinstance(previous["sha256"], str)
+            and len(previous["sha256"]) == 64
+            and all(c in "0123456789abcdef" for c in previous["sha256"]),
+            "Invalid previous file digest",
+        )
+    require(
+        len({name.casefold() for name in previous_files}) == len(previous_files),
+        "Case-insensitive previous inventory collision",
+    )
+    require(
+        all(mode in {"100644", "100755"} for mode in observed_modes.values()),
+        "Unsupported observed destination mode",
+    )
     exact(
         profile,
         "schema repository repository_id source_repository prefix entrypoints",
@@ -37,6 +65,10 @@ def plan(
         "Adapter source mismatch",
     )
     prefix = safe_path(profile["prefix"])
+    require(
+        all(name.startswith(prefix + "/") for name in previous_files),
+        "Previous managed inventory escapes accepted vendor prefix",
+    )
     require(
         not {part.casefold() for part in prefix.split("/")} & {".git", ".agent"}
         and isinstance(profile["entrypoints"], list)
@@ -68,9 +100,17 @@ def plan(
         before = (
             hashlib.sha256(destination.read_bytes()).hexdigest() if destination.exists() else None
         )
-        if before != record["sha256"]:
+        mode = observed_modes.get(relative)
+        require(
+            (before is None and mode is None)
+            or (before is not None and mode in {"100644", "100755"}),
+            "Missing or inconsistent observed destination Git mode",
+        )
+        current = {"sha256": before, "mode": mode}
+        canonical_file = {"sha256": record["sha256"], "mode": record["mode"]}
+        if before is not None and current != canonical_file:
             require(
-                before == previous_files.get(relative),
+                current == previous_files.get(relative),
                 "Local vendor edits or unmanaged file preserved",
             )
         rows.append(
@@ -78,12 +118,14 @@ def plan(
                 "source": name,
                 "destination": relative,
                 "before": before,
+                "before_mode": mode,
                 "after": record["sha256"],
                 "mode": record["mode"],
-                "action": "KEEP" if before == record["sha256"] else "COPY_CANONICAL",
+                "action": "KEEP" if current == canonical_file else "COPY_CANONICAL",
             }
         )
         paths.add(relative)
+    require(set(observed_modes) <= paths | set(previous_files), "Unmanaged mode inventory")
     # Historical receipt material and removed files need an explicit compatibility
     # decision; this operation cannot silently delete them.
     retained = sorted(set(previous_files) - paths)

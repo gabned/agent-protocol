@@ -108,7 +108,7 @@
     },
     {
       "path": "docs/agent-protocol/adoption.md",
-      "sha256": "6a3841c396bbffde8daaa075fc875c8c382482f6fe87bcdb70cd91d64f0a9467",
+      "sha256": "817856962992c9048a048976b7ea797f55d64142ebf6c72ad029f6bcf12e0419",
       "phases": [
         "ADOPT"
       ],

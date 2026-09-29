@@ -33,15 +33,47 @@ class AdoptionTests(unittest.TestCase):
                 "accepted_manifest_digest": digest(manifest),
                 "accepted_profile_digest": digest(profile),
                 "previous_files": {},
+                "accepted_previous_files_digest": digest({}),
+                "observed_modes": {},
             }
             result = plan(source, target, manifest, profile, **args)
             self.assertEqual(result["adoption"], "REQUIRES_NATIVE_CONFORMANCE")
             copied = target / result["files"][0]["destination"]
             copied.parent.mkdir(parents=True)
             copied.write_bytes(b"unmanaged work")
+            relative = result["files"][0]["destination"]
+            args["observed_modes"][relative] = "100644"
             with self.assertRaises(ValueError):
                 plan(source, target, manifest, profile, **args)
             self.assertEqual(copied.read_bytes(), b"unmanaged work")
+            import hashlib
+
+            forged = {
+                relative: {
+                    "sha256": hashlib.sha256(copied.read_bytes()).hexdigest(),
+                    "mode": "100644",
+                }
+            }
+            with self.assertRaisesRegex(ValueError, "Previous managed inventory"):
+                plan(source, target, manifest, profile, **{**args, "previous_files": forged})
+            copied.write_bytes(content)
+            args["observed_modes"][relative] = "100755"
+            with self.assertRaisesRegex(ValueError, "Local vendor edits"):
+                plan(source, target, manifest, profile, **args)
+            prior = {relative: {"sha256": manifest["files"][0]["sha256"], "mode": "100755"}}
+            accepted_prior = {
+                **args,
+                "previous_files": prior,
+                "accepted_previous_files_digest": digest(prior),
+            }
+            fixed = plan(source, target, manifest, profile, **accepted_prior)
+            self.assertEqual(fixed["files"][0]["action"], "COPY_CANONICAL")
+            self.assertEqual(fixed["files"][0]["before_mode"], "100755")
+            args["observed_modes"][relative] = "100644"
+            self.assertEqual(
+                plan(source, target, manifest, profile, **accepted_prior)["files"][0]["action"],
+                "KEEP",
+            )
 
     def test_native_vendor_location_requires_independent_profile_acceptance(self):
         content, manifest = fixture()
@@ -63,6 +95,8 @@ class AdoptionTests(unittest.TestCase):
                 "accepted_manifest_digest": digest(manifest),
                 "accepted_profile_digest": digest(profile),
                 "previous_files": {},
+                "accepted_previous_files_digest": digest({}),
+                "observed_modes": {},
             }
             result = plan(source, target, manifest, profile, **args)
             self.assertEqual(
