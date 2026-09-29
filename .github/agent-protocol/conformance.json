@@ -1,0 +1,11 @@
+{
+  "schema": "agent-protocol-conformance/v2",
+  "entrypoint": ["python", "tools/check.py"],
+  "platforms": ["ubuntu-latest", "windows-latest"],
+  "current_tests": ["ledger", "lifecycle", "host", "qualification", "cli", "source", "adoption", "documents", "audit", "packaging", "collect"],
+  "legacy_suite": "compat/legacy/tests",
+  "required_checks": ["trusted-scope@pull_request_target", "conformance@pull_request", "conformance@push"],
+  "native_consumer_gates": "PRESERVED_LOCAL_ACCEPTED_POLICY",
+  "manual_test_default": "NOT_RUN",
+  "publication_authorized": false
+}

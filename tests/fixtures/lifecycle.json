@@ -1,0 +1,147 @@
+{
+  "state": {
+    "identity": {
+      "repository": "example/synthetic",
+      "repository_id": 17,
+      "pr": 4,
+      "branch": "work/example",
+      "workstream": "synthetic",
+      "workstream_class": "PROTOCOL",
+      "origin_owner": "owner-a"
+    },
+    "status": "NEW",
+    "owner": "owner-a",
+    "tip": null,
+    "head": null,
+    "coordinates": null,
+    "qualification": null,
+    "merge": null,
+    "events": [],
+    "operations": {}
+  },
+  "request": {
+    "operation": "START",
+    "operation_id": "operation-start",
+    "expected_tip": null,
+    "expected_head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "parameters": {}
+  },
+  "observation": {
+    "identity": {
+      "repository": "example/synthetic",
+      "repository_id": 17,
+      "pr": 4,
+      "branch": "work/example",
+      "workstream": "synthetic",
+      "workstream_class": "PROTOCOL",
+      "origin_owner": "owner-a"
+    },
+    "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "coordinates": {
+      "REVIEWS": "synthetic",
+      "HEAD": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "PR_STATE": "OPEN",
+      "REPOSITORY": "38f0ab8fac443ba9ad93f5723d8bab3bad07170f84dedb188c41cd88b221066c",
+      "MASTER": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "BASE": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "RUNTIME": "synthetic",
+      "POLICY": "f75d1e9a64cdb220bd181daeb5624986d4d82d4d417b69d7686982ba27aabda1",
+      "AUTHORITY": "3630c0c3c28b26246680a20185caa7b138865a7d984b6dd823b1c8d52c457cbe",
+      "PIN": "dddddddddddddddddddddddddddddddddddddddd"
+    },
+    "observed_at": "2026-01-01T00:00:00Z",
+    "effects": "NO_PRODUCTION",
+    "gates": [
+      {
+        "id": "ci",
+        "gate": "CI",
+        "dependencies": [
+          "BASE",
+          "HEAD",
+          "REPOSITORY",
+          "RUNTIME"
+        ],
+        "coordinates": {
+          "REPOSITORY": "38f0ab8fac443ba9ad93f5723d8bab3bad07170f84dedb188c41cd88b221066c",
+          "BASE": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "RUNTIME": "synthetic",
+          "HEAD": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "result": "PASS",
+        "source": "authenticated:synthetic"
+      },
+      {
+        "id": "effects",
+        "gate": "EFFECTS",
+        "dependencies": [
+          "BASE",
+          "HEAD",
+          "POLICY",
+          "REPOSITORY"
+        ],
+        "coordinates": {
+          "POLICY": "f75d1e9a64cdb220bd181daeb5624986d4d82d4d417b69d7686982ba27aabda1",
+          "BASE": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "REPOSITORY": "38f0ab8fac443ba9ad93f5723d8bab3bad07170f84dedb188c41cd88b221066c",
+          "HEAD": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "result": "PASS",
+        "source": "authenticated:synthetic"
+      }
+    ],
+    "history": {
+      "source": "authenticated:synthetic"
+    },
+    "material": {
+      "restored": true,
+      "source": "artifact:synthetic"
+    },
+    "merge": null,
+    "post_merge": null
+  },
+  "authority": {
+    "identity": {
+      "repository": "example/synthetic",
+      "repository_id": 17,
+      "pr": 4,
+      "branch": "work/example",
+      "workstream": "synthetic",
+      "workstream_class": "PROTOCOL",
+      "origin_owner": "owner-a"
+    },
+    "principal": "owner-a",
+    "operations": [
+      "START",
+      "QUALIFY",
+      "REFRESH",
+      "INTERRUPT",
+      "RESUME",
+      "INTEGRATE",
+      "RECONCILE",
+      "CLOSE"
+    ],
+    "capabilities": {
+      "production": false,
+      "deploy": false,
+      "migrate": false
+    },
+    "policy": {
+      "contract": {
+        "schema": "agent-policy-contract/v1",
+        "repository": "example/synthetic",
+        "source_commit": "dddddddddddddddddddddddddddddddddddddddd",
+        "reference": "synthetic/contract.md",
+        "routing": "PROTOCOL/v1"
+      },
+      "contract_digest": "61c09e02dee4043bbcdaee96204fafd392211c864c1f0f232d0379057d4d1d52",
+      "selected": "NO_PRODUCTION",
+      "required_gates": [
+        "CI",
+        "EFFECTS"
+      ]
+    },
+    "pin": "dddddddddddddddddddddddddddddddddddddddd",
+    "grants": {},
+    "signer_registry": "accepted-signers:synthetic"
+  }
+}
