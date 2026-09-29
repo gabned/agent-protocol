@@ -642,15 +642,6 @@ class NativeGitHubHost:
             == (self.identity["repository"], self.identity["repository_id"]),
             "Repository identity changed",
         )
-        branch = self.api.request("/branches/" + quote(repository["default_branch"], safe=""))
-        if branch["commit"]["sha"] != revision:
-            ancestry = self.api.request(
-                "/compare/" + revision + "..." + sha(branch["commit"]["sha"])
-            )
-            require(
-                ancestry["merge_base_commit"]["sha"] == revision and ancestry["status"] == "ahead",
-                "Enrollment profile is not on accepted default ancestry",
-            )
         record = self.api.request("/contents/" + quote(path, safe="/") + "?ref=" + revision)
         require(
             record["sha"] == sha(binding["profile_blob"]) and record["encoding"] == "base64",
@@ -682,6 +673,18 @@ class NativeGitHubHost:
             "CI cannot be optional",
         )
         return profile
+
+    def check_profile_ancestry(self, current_default):
+        # Enrollment pins immutable bytes independently. Mutable default ancestry
+        # constrains candidate effects, never access to an existing signed journal.
+        revision = sha(self.binding["profile_revision"])
+        current_default = sha(current_default)
+        if current_default != revision:
+            ancestry = self.api.request("/compare/" + revision + "..." + current_default)
+            require(
+                ancestry["merge_base_commit"]["sha"] == revision and ancestry["status"] == "ahead",
+                "Enrollment profile is not on accepted default ancestry",
+            )
 
     def check_effects(self, profile):
         # Each condition was qualified against real triggers under predecessor
@@ -792,6 +795,7 @@ class NativeGitHubHost:
         authority = self.authority(state)
         merged = pr.get("merged") is True
         if not recovery and not merged:
+            self.check_profile_ancestry(collection["final"][1]["response"]["commit"]["sha"])
             self.check_effects(self.profile)
         require(pr["state"] in {"open", "closed"}, "Unknown PR state")
         require(
@@ -799,7 +803,7 @@ class NativeGitHubHost:
             and pr["base"]["repo"]["id"] == identity["repository_id"]
             and pr["base"]["repo"]["full_name"] == identity["repository"]
             and (
-                merged
+                merged or recovery
                 or pr["base"]["ref"]
                 == collection["preflight"]["repo"]["response"]["default_branch"]
             ),

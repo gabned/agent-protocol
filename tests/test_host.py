@@ -168,6 +168,24 @@ class SignedJournalTests(unittest.TestCase):
         native.journal = SimpleNamespace(read=lambda: state, synchronize=lambda: None)
         native.collect_raw = lambda identity: copy.deepcopy(collection)
         native.profile = native.load_profile()
+        original_api = native.api.request
+
+        def replaced_default(suffix, **kwargs):
+            if suffix == "/branches/main":
+                return {"commit": {"sha": "7" * 40}, "protected": False}
+            if suffix.startswith("/compare/"):
+                return {"merge_base_commit": {"sha": "6" * 40}, "status": "diverged"}
+            return original_api(suffix, **kwargs)
+
+        native.api.request = replaced_default
+        self.assertEqual(native.load_profile(), native.profile)
+        original_default = collection["final"][1]["response"]["commit"]["sha"]
+        collection["final"][1]["response"]["commit"]["sha"] = "7" * 40
+        with self.assertRaisesRegex(ValueError, "accepted default ancestry"):
+            native.observe(IDENTITY)
+        self.assertEqual(native.observe(IDENTITY, recovery=True)["gates"], [])
+        collection["final"][1]["response"]["commit"]["sha"] = original_default
+        native.api.request = original_api
         first, second = native.observe(IDENTITY), native.observe(IDENTITY)
         self.assertEqual(first["gates"], second["gates"])
         self.assertEqual(
@@ -433,6 +451,9 @@ class SignedJournalTests(unittest.TestCase):
         )
         # A merged PR retains its original target after the default branch changes.
         collection["preflight"]["repo"]["response"]["default_branch"] = "replacement-default"
+        collection["final"][1]["response"]["commit"]["sha"] = "7" * 40
+        native.api.request = replaced_default
+        native.profile = native.load_profile()
         plan = evaluate(state, request, native.observe(IDENTITY), authority)
         events.append({"commit": "4" * 40, "parents": [state["tip"]], "event": plan["event"]})
         state = replay(
