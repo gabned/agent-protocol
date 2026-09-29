@@ -1,0 +1,105 @@
+{
+  "ledger_regression": {
+    "owner_issue": "#171",
+    "pull_requests": [
+      {
+        "head_sha": "d1153d3038e3456faa1279d3187994528dffaf01",
+        "merge_sha": "d63c1028b4f3751f752359f8b0f94a4d93bfe6dd",
+        "pr": "#172",
+        "role": "OWNER",
+        "sequence": 1,
+        "state": "MERGED"
+      },
+      {
+        "head_sha": "aa4962cafc753973e91b356c8a90c35203eaa100",
+        "merge_sha": "8649b98aad969b32767f2a90492e4ce5d5969bd2",
+        "pr": "#173",
+        "role": "CORRECTION",
+        "sequence": 2,
+        "state": "MERGED"
+      }
+    ],
+    "repository": "gabned/provelume",
+    "slice_id": "0.10/S04"
+  },
+  "mode": "READ_ONLY",
+  "observed_at": "2026-09-03T10:22:00Z",
+  "protocol_version": "1.4.1",
+  "repositories": [
+    {
+      "authority_ceiling": "THROUGH_PRODUCTION_B",
+      "default_branch": "master",
+      "human_boundary": "LEVEL_C_AUTHORIZATION",
+      "observation_source": "GITHUB_READ_ONLY",
+      "observed_head_sha": "505dd1829c09e907feabd9101b223ed843eb03e0",
+      "release_profile": "DEPLOYMENT_LEVEL_C",
+      "repository": "maxithlon/maxithlon",
+      "risk_ceiling": "CRITICAL_PRODUCTION",
+      "source_paths": [
+        "AGENTS.md",
+        "AGENT_STATUS.md",
+        "docs/delivery-model.md",
+        "docs/runbooks/agent-development.md"
+      ],
+      "state_model": "PERSISTENT_CHECKPOINT",
+      "upstream_repository": "NONE",
+      "writes_performed": false
+    },
+    {
+      "authority_ceiling": "THROUGH_PRODUCTION_B",
+      "default_branch": "main",
+      "human_boundary": "NONE",
+      "observation_source": "GITHUB_READ_ONLY",
+      "observed_head_sha": "c64a0ee00529f3530c0d9814f8f3bcfcf52fe484",
+      "release_profile": "CODE_ONLY_PRODUCTION_B",
+      "repository": "brickms/brickms",
+      "risk_ceiling": "REVERSIBLE_PRODUCTION",
+      "source_paths": [
+        "AGENTS.md",
+        "AGENT_STATUS.md",
+        "docs/delivery-model.md",
+        "docs/runbooks/agent-development.md"
+      ],
+      "state_model": "PERSISTENT_CHECKPOINT",
+      "upstream_repository": "NONE",
+      "writes_performed": false
+    },
+    {
+      "authority_ceiling": "THROUGH_RELEASE",
+      "default_branch": "main",
+      "human_boundary": "NONE",
+      "observation_source": "GITHUB_READ_ONLY",
+      "observed_head_sha": "8649b98aad969b32767f2a90492e4ce5d5969bd2",
+      "release_profile": "GITHUB_ARTIFACT",
+      "repository": "gabned/provelume",
+      "risk_ceiling": "PUBLIC_ARTIFACT",
+      "source_paths": [
+        "AGENTS.md",
+        "docs/governance/release-policy.md",
+        "tools/agent_protocol_v1_4.py"
+      ],
+      "state_model": "PR_LOCAL",
+      "upstream_repository": "NONE",
+      "writes_performed": false
+    },
+    {
+      "authority_ceiling": "THROUGH_PRODUCTION_B",
+      "default_branch": "main",
+      "human_boundary": "NONE",
+      "observation_source": "GITHUB_READ_ONLY",
+      "observed_head_sha": "ef3725074ba81c4497b519933a734b6dd05436f2",
+      "release_profile": "UPSTREAM_RELEASE_VERIFIED",
+      "repository": "gabned/provelume.com",
+      "risk_ceiling": "REVERSIBLE_PRODUCTION",
+      "source_paths": [
+        "AGENTS.md",
+        "dependencies/provelume-core.lock.json",
+        "docs/core-release-chain.md"
+      ],
+      "state_model": "PR_LOCAL",
+      "upstream_repository": "gabned/provelume",
+      "writes_performed": false
+    }
+  ],
+  "schema_version": 1
+}
