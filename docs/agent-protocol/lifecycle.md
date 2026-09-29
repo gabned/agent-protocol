@@ -48,6 +48,9 @@ the live repository, PR, branch, account and current head, but does not require 
 new candidate to qualify. Missing classification, forbidden changes or non-linear
 candidate history cannot prevent a conclusively authorized journal-only recovery.
 This route emits no qualification evidence and cannot integrate the candidate.
+Its raw collection reads only repository identity, PR identity/state/head and the
+default branch, with a final PR comparison. Review/thread pagination, CI access
+and candidate source traversal are absent from this typed recovery route.
 
 INTERRUPT preserves owner and durable recovery material, invalidates qualification
 and records the reason. RESUME verifies restoration from durable material and
@@ -62,7 +65,11 @@ A head change before closure cannot prevent authorized abandonment; no earlier
 event is rewritten. Terminal journals cannot be reopened or reset.
 
 Before every write the host rereads the journal, reobserves external preconditions
-and evaluates the same request. The signed event records its expected predecessor
+and evaluates the same request. The host synchronizes the remote journal again after final collection, before
+dispatching integration. A changed or missing intent refuses dispatch. This check
+does not claim an atomic transaction between GitHub's journal ref and PR merge;
+non-execution grants must independently establish that the original host is quiescent.
+The event records its expected predecessor
 and candidate head. Ref advancement uses compare-and-swap. Concurrent/divergent
 history is reconciled or reported; no force push, generic checkpoint editor,
 history reset or implicit ownership takeover is supported.

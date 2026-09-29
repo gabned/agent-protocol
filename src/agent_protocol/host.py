@@ -393,8 +393,11 @@ class ProtocolHost:
         current_authority = self.authority(state)
         refreshed = evaluate(state, request, fresh, current_authority)
         require(same_plan(refreshed, plan), "Merge preconditions changed after durable intent")
+        self.journal.synchronize()
+        current = self.journal.read()
         require(
-            self.journal.read()["tip"] == durable["tip"], "Concurrent integration intent changed"
+            current["tip"] == durable["tip"] and current["status"] == "INTEGRATING",
+            "Concurrent integration intent changed",
         )
         try:
             response = self.merge(
@@ -728,11 +731,36 @@ class NativeGitHubHost:
             },
         }
 
+    def recovery_collection(self, identity):
+        """Bounded identity-only reads; recovery never depends on review/CI access."""
+        repository = deepcopy(self.api.request(""))
+        pr = deepcopy(self.api.request(f"/pulls/{identity['pr']}"))
+        branch = deepcopy(self.api.request(
+            "/branches/" + quote(repository["default_branch"], safe="")
+        ))
+        final_pr = self.api.request(f"/pulls/{identity['pr']}")
+        require(
+            (repository["full_name"], repository["id"])
+            == (identity["repository"], identity["repository_id"])
+            and pr["head"] == final_pr["head"]
+            and pr["base"] == final_pr["base"]
+            and pr["state"] == final_pr["state"]
+            and pr.get("merged") == final_pr.get("merged")
+            and pr["base"]["sha"] == branch["commit"]["sha"],
+            "Recovery identity/default changed during collection",
+        )
+        return {
+            "head": pr["head"]["sha"],
+            "preflight": {"repo": {"response": repository},
+                          "active_pull_request": {"pr": {"response": pr}}},
+            "final": [{"response": final_pr}, {"response": branch}],
+        }
+
     def observe(self, identity, *, recovery=False):
         require(identity == self.identity, "Host identity changed")
         self.api.assert_account()
         self.check_effects(self.profile)
-        collection = self.collect_raw(identity)
+        collection = self.recovery_collection(identity) if recovery else self.collect_raw(identity)
         active = collection["preflight"]["active_pull_request"]
         pr = active["pr"]["response"]
         require(
@@ -753,14 +781,7 @@ class NativeGitHubHost:
         )
         if recovery:
             require(not merged, "Recovery cannot reinterpret an actual merge")
-            reviews = {
-                "digest": digest(
-                    {
-                        "reviews": active["reviews"]["items"],
-                        "threads": active["threads"]["response"],
-                    }
-                )
-            }
+            reviews = {"digest": digest({"reviews": "NOT_COLLECTED_FOR_TYPED_RECOVERY"})}
         else:
             # A source branch may advance after merge. Reviews settle the retained
             # qualified candidate, while the observation keeps the live PR head.
@@ -913,6 +934,7 @@ class NativeGitHubHost:
         require(identity == self.identity and method == "merge", "Unknown merge authority")
         self.api.assert_account()
         self.check_effects(self.profile)
+        self.journal.synchronize()
         state = self.journal.read()
         require(
             state["status"] == "INTEGRATING"
@@ -952,4 +974,13 @@ class NativeGitHubHost:
             "Qualification no longer complete at merge boundary",
         )
         self.check_effects(self.profile)
+        self.journal.synchronize()
+        current = self.journal.read()
+        require(
+            current["tip"] == state["tip"]
+            and current["status"] == "INTEGRATING"
+            and current["head"] == expected_head
+            and current["coordinates"] == state["coordinates"],
+            "Remote integration intent changed before dispatch",
+        )
         return self.api.merge_pull_request(number=identity["pr"], expected_head=expected_head)

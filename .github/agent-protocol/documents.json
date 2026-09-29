@@ -51,7 +51,7 @@
     },
     {
       "path": "docs/agent-protocol/lifecycle.md",
-      "sha256": "1f8e853b6f57ea7d06c8baff70812f20a9b726f1fba5e97f9ba8a69dda61ab69",
+      "sha256": "21bf8bb9d912b3940b993b4533d3bf8c625785e3e5d50f732023277917673653",
       "phases": [
         "START",
         "RECOVER",

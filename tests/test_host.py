@@ -150,7 +150,7 @@ class SignedJournalTests(unittest.TestCase):
             request=api, assert_account=lambda: None, merge_pull_request=normal_merge
         )
         native.source_receipt = {"result": "BYTES_VERIFIED", "revision": authority["pin"]}
-        native.journal = SimpleNamespace(read=lambda: state)
+        native.journal = SimpleNamespace(read=lambda: state, synchronize=lambda: None)
         native.collect_raw = lambda identity: copy.deepcopy(collection)
         native.profile = native.load_profile()
         first, second = native.observe(IDENTITY), native.observe(IDENTITY)
@@ -181,6 +181,7 @@ class SignedJournalTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "durable integration intent"):
             native.merge(**args)
         native.journal = SimpleNamespace(
+            synchronize=lambda: None,
             read=lambda: {
                 **state,
                 "status": "INTEGRATING",
@@ -192,6 +193,23 @@ class SignedJournalTests(unittest.TestCase):
         self.assertEqual(native.merge(**args)["state"], "MERGED_RECONCILIATION_REQUIRED")
         self.assertEqual(mutations[0]["number"], 4)
         self.assertEqual(mutations[0]["expected_head"], "a" * 40)
+        original_journal = native.journal
+        retained_intent = copy.deepcopy(native.journal.read())
+        synchronized = []
+
+        def competing_settlement():
+            synchronized.append(True)
+            if len(synchronized) == 2:
+                retained_intent.update(tip="7" * 40, status="ACTIVE")
+
+        native.journal = SimpleNamespace(
+            read=lambda: retained_intent, synchronize=competing_settlement
+        )
+        count = len(mutations)
+        with self.assertRaisesRegex(ValueError, "Remote integration intent changed"):
+            native.merge(**args)
+        self.assertEqual(len(mutations), count)
+        native.journal = original_journal
         native.api.request = lambda suffix: (
             {"commit": {"sha": "0" * 40}, "protected": True}
             if suffix == "/branches/main"
@@ -262,6 +280,8 @@ class SignedJournalTests(unittest.TestCase):
         collection["head"] = pr["head"]["sha"] = "f" * 40
         pr["body"] = "invalid candidate marker"
         collection["trees"][0]["commit"]["response"]["parents"] = []
+        original_collect = native.collect_raw
+        native.collect_raw = lambda identity: self.fail("Recovery must not collect reviews or CI")
         host = ProtocolHost(
             native.journal,
             collect=native.observe,
@@ -272,6 +292,11 @@ class SignedJournalTests(unittest.TestCase):
         plan = host.explain(request)
         self.assertEqual(plan["event"]["payload"]["intent_head"], "a" * 40)
         self.assertEqual(plan["event"]["expected_head"], "f" * 40)
+        self.assertTrue(all(
+            not any(part in suffix for part in ("reviews", "comments", "actions/runs"))
+            for suffix, _ in calls
+        ))
+        native.collect_raw = original_collect
 
         # The real post-merge native collector may run in different seconds.
         collection["head"] = pr["head"]["sha"] = "9" * 40
