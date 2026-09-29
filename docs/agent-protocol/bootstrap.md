@@ -46,6 +46,10 @@ entry. A later gate upgrade needs a separately predecessor-qualified transfer;
 the ordinary bootstrap guard has no bypass or implicit upgrade capability.
 Functional package, new conformance tests and current topic documents use only
 the already registered future paths. The stable GitHub repository ID must match.
+The native checker requires the entire registered functional inventory once any
+package or current collector surface appears. It then lints src and executes the
+current Node collector suite as well as the unchanged legacy Node, Python and
+root conformance suites. A partial functional tree cannot pass as bootstrap.
 Every existing and registered future path has an exact Git mode in the accepted
 registry. A mode-only change fails even when both modes denote regular files.
 

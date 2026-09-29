@@ -6,12 +6,16 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("guard", ROOT / "tools/guard.py")
 guard = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(guard)
+check_spec = importlib.util.spec_from_file_location("check", ROOT / "tools/check.py")
+checker = importlib.util.module_from_spec(check_spec)
+check_spec.loader.exec_module(checker)
 
 
 def registry_for(paths):
@@ -19,6 +23,55 @@ def registry_for(paths):
 
 
 class GuardTest(unittest.TestCase):
+    def test_current_collector_failure_reaches_native_runner(self):
+        original_run = subprocess.run
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            registry = json.loads(
+                (ROOT / ".github/agent-protocol/bootstrap.json").read_text()
+            )
+            for name in registry["paths"]:
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("")
+            (root / ".github/agent-protocol/bootstrap.json").write_text(
+                json.dumps(registry)
+            )
+            (root / "tests/test_collect.mjs").write_text(
+                "throw new Error('synthetic rejection');\n"
+            )
+            executed = []
+
+            def invoke(argv, **kwargs):
+                executed.append(argv)
+                if argv == ["node", "--test", "tests/test_collect.mjs"]:
+                    return original_run(argv, **kwargs, capture_output=True)
+                return SimpleNamespace(returncode=0)
+
+            with (
+                patch.object(checker, "ROOT", root),
+                patch.object(checker.subprocess, "run", side_effect=invoke),
+            ):
+                self.assertNotEqual(checker.main(), 0)
+            self.assertIn(["node", "--test", "tests/test_collect.mjs"], executed)
+            self.assertIn("src", executed[0])
+
+    def test_partial_functional_inventory_is_not_bootstrap_success(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "pyproject.toml").write_text("")
+            registry = root / ".github/agent-protocol/bootstrap.json"
+            registry.parent.mkdir(parents=True)
+            registry.write_text(
+                json.dumps({"paths": ["pyproject.toml", "tests/test_collect.mjs"]})
+            )
+            with (
+                patch.object(checker, "ROOT", root),
+                patch.object(checker.subprocess, "run") as run,
+            ):
+                self.assertEqual(checker.main(), 2)
+                run.assert_not_called()
+
     def test_mode_only_change_and_incomplete_registration_fail(self):
         with (
             patch.object(
