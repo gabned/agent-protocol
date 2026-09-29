@@ -95,6 +95,25 @@ test('merged settlement does not require unrelated source history or newer-head 
   assert.equal(result.base,null);
   assert.deepEqual(result.trees,[]);
   assert.equal(result.postMerge.head_sha,merge);
+  responses[''].default_branch='replacement-default';
+  responses['/branches/replacement-default']={commit:{sha:'f'.repeat(40)}};
+  delete responses['/branches/main'];
+  const afterDefaultChange=await collectLifecycle(options);
+  assert.equal(afterDefaultChange.collection_purpose,'MERGE_SETTLEMENT');
+  assert.equal(afterDefaultChange.preflight.active_pull_request.pr.response.base.ref,'main');
+  assert.equal(afterDefaultChange.postMerge.head_sha,merge);
+  const savedFetch=options.fetchJson;
+  let settledReads=0;
+  options.fetchJson=async url=>{
+    const value=await savedFetch(url);
+    if(url.endsWith('/pulls/4') && ++settledReads===2) value.base.ref='unexpected-base';
+    return value;
+  };
+  await assert.rejects(()=>collectLifecycle(options),/PR or default changed/);
+  options.fetchJson=savedFetch;
+  responses['/pulls/4'].merged=false;
+  await assert.rejects(()=>collectLifecycle(options),/identity mismatch/);
+  responses['/pulls/4'].merged=true;
   options.fetchReviewThreads=async()=>({threads:[]});
   await assert.rejects(()=>collectLifecycle(options),/Complete reviews/);
 });

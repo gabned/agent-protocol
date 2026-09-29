@@ -18,10 +18,11 @@ export async function collectLifecycle({repository, repositoryId, pr, fetchJson,
     fetchReviewThreads, persistObservation, now, maxPages});
   const identity = preflight.repo.response;
   const active = preflight.active_pull_request;
+  const settling = active.pr.response?.merged === true;
   if (identity.id !== repositoryId || active.pr.status !== 'OBSERVED' ||
       active.pr.response.number !== pr || active.pr.response.base?.repo?.id !== repositoryId ||
       active.pr.response.base?.repo?.full_name !== repository ||
-      active.pr.response.base?.ref !== identity.default_branch ||
+      (!settling && active.pr.response.base?.ref !== identity.default_branch) ||
       typeof active.pr.response.head?.ref !== 'string' ||
       !Number.isSafeInteger(active.pr.response.head?.repo?.id) ||
       typeof active.pr.response.head?.repo?.full_name !== 'string') throw Error('Repository/PR identity mismatch');
@@ -43,7 +44,6 @@ export async function collectLifecycle({repository, repositoryId, pr, fetchJson,
   if (!/^[0-9a-f]{40}$/.test(head || '')) throw Error('Exact candidate required');
   const evidence = await createEvidenceCollector({repository, fetchJson, persistObservation,
     now, maxPages, cacheSnapshot, expectedCacheSha256, sha256});
-  const settling = active.pr.response.merged === true;
   const ci = settling ? null : await evidence.collectRuns(head);
   const postMerge = settling
     ? await evidence.collectRuns(active.pr.response.merge_commit_sha) : null;
@@ -107,7 +107,7 @@ export async function collectLifecycle({repository, repositoryId, pr, fetchJson,
   const sameEndpoint = side => ['sha','ref'].every(k => finalPr[side]?.[k] === initialPr[side]?.[k]) &&
     ['id','full_name'].every(k => finalPr[side]?.repo?.[k] === initialPr[side]?.repo?.[k]);
   if (finalPr.number !== pr || !sameEndpoint('head') || !sameEndpoint('base') ||
-      finalPr.base?.ref !== identity.default_branch ||
+      (!settling && finalPr.base?.ref !== identity.default_branch) ||
       finalPr.draft !== initialPr.draft || finalPr.mergeable !== initialPr.mergeable ||
       finalPr.review_comments !== initialPr.review_comments ||
       (!settling && ['comments','changed_files','commits'].some(k => finalPr[k] !== initialPr[k])) ||

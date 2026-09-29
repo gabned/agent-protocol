@@ -431,6 +431,8 @@ class SignedJournalTests(unittest.TestCase):
             expected_head="9" * 40,
             parameters={},
         )
+        # A merged PR retains its original target after the default branch changes.
+        collection["preflight"]["repo"]["response"]["default_branch"] = "replacement-default"
         plan = evaluate(state, request, native.observe(IDENTITY), authority)
         events.append({"commit": "4" * 40, "parents": [state["tip"]], "event": plan["event"]})
         state = replay(
@@ -449,6 +451,10 @@ class SignedJournalTests(unittest.TestCase):
             parameters={"next_action": "Review the next objective", "next_location": "here"},
         )
         first_close = evaluate(state, request, native.observe(IDENTITY), authority)
+        pr["base"]["repo"]["id"] += 1
+        with self.assertRaisesRegex(ValueError, "identity changed"):
+            native.observe(IDENTITY)
+        pr["base"]["repo"]["id"] -= 1
         post["inventory"][0]["observed_at"] = (datetime.now(UTC) - timedelta(seconds=5)).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
         )

@@ -797,7 +797,12 @@ class NativeGitHubHost:
         require(
             pr["head"]["sha"] == collection["head"]
             and pr["base"]["repo"]["id"] == identity["repository_id"]
-            and pr["base"]["ref"] == collection["preflight"]["repo"]["response"]["default_branch"],
+            and pr["base"]["repo"]["full_name"] == identity["repository"]
+            and (
+                merged
+                or pr["base"]["ref"]
+                == collection["preflight"]["repo"]["response"]["default_branch"]
+            ),
             "Observed candidate/base identity changed",
         )
         if recovery:
