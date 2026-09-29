@@ -306,6 +306,15 @@ def evaluate(state, request, observation, authority, *, now=None):
             }
         elif operation == "CLOSE":
             exact(p, "next_action next_location", "closure parameters")
+            merge = observation["merge"]
+            require(
+                state["merge"] is not None
+                and merge is not None
+                and all(merge.get(k) == v for k, v in state["merge"].items())
+                and merge.get("parents") == [state["coordinates"]["BASE"], state["head"]]
+                and merge.get("qualified_tree") == state["merge"]["tree_sha"],
+                "Closure must retain the reconciled merge identity",
+            )
             post = observation["post_merge"]
             require(
                 post["head"] == state["merge"]["merge_sha"]

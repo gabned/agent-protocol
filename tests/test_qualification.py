@@ -201,6 +201,15 @@ class QualificationTests(unittest.TestCase):
         ]
         args = {"now": datetime(2026, 1, 1, tzinfo=UTC)}
         self.assertEqual(verify_review_activity(collection, requirements, **args)["result"], "PASS")
+        advanced = copy.deepcopy(collection)
+        advanced["head"] = "f" * 40
+        self.assertEqual(
+            verify_review_activity(advanced, requirements, **args)["result"], "NOT_RUN"
+        )
+        retained = verify_review_activity(advanced, requirements, review_head=head, **args)
+        self.assertEqual(retained["result"], "PASS")
+        self.assertEqual({row["head"] for row in retained["evidence"]}, {head})
+        self.assertEqual(advanced["head"], "f" * 40)
         for attack in ("author", "head", "unfinished"):
             changed = copy.deepcopy(collection)
             if attack == "author":

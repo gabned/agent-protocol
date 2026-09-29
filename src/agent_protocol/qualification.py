@@ -146,9 +146,10 @@ def normalize_ci(history, *, accepted_policy, observed_at):
     }
 
 
-def verify_reviews(collection, *, required_reviewers, now=None):
+def verify_reviews(collection, *, required_reviewers, now=None, review_head=None):
     """Thread completeness is cross-checked against actual REST comment identities."""
     now = now or datetime.now(UTC)
+    review_head = review_head or collection["head"]
     active = collection["preflight"]["active_pull_request"]
     pr = active["pr"]["response"]
     require(
@@ -184,7 +185,7 @@ def verify_reviews(collection, *, required_reviewers, now=None):
     approved = all(
         name in latest
         and latest[name]["state"] == "APPROVED"
-        and latest[name]["commit_id"] == collection["head"]
+        and latest[name]["commit_id"] == review_head
         for name in required_reviewers
     )
     blocked = any(r["state"] == "CHANGES_REQUESTED" for r in latest.values())
@@ -215,6 +216,7 @@ def verify_reviews(collection, *, required_reviewers, now=None):
         "digest": digest(
             {
                 "reviews": active["reviews"]["items"],
+                "head": review_head,
                 "threads": threads,
                 "viewer": viewer.get("response") if viewer else None,
             }
@@ -222,13 +224,14 @@ def verify_reviews(collection, *, required_reviewers, now=None):
     }
 
 
-def verify_review_activity(collection, requirements, *, now=None):
+def verify_review_activity(collection, requirements, *, now=None, review_head=None):
     """Use authenticated provider comments and GitHub resolution of abbreviated refs.
 
     An edited PR body is never review evidence. Unknown provider formats fail closed.
     Short SHAs are resolved independently by GitHub, not merely prefix-compared.
     """
     now = now or datetime.now(UTC)
+    review_head = review_head or collection["head"]
     comments, evidence = collection["issueComments"], []
     pr = collection["preflight"]["active_pull_request"]["pr"]["response"]
     require(
@@ -275,7 +278,7 @@ def verify_review_activity(collection, requirements, *, now=None):
         )
         instant = datetime.fromisoformat(resolved[0]["observed_at"].replace("Z", "+00:00"))
         require(0 <= (now - instant).total_seconds() <= 900, "Review reference observation stale")
-        if resolved[0]["response"]["sha"] != collection["head"]:
+        if resolved[0]["response"]["sha"] != review_head:
             return {
                 "result": "NOT_RUN",
                 "evidence": evidence,
@@ -290,7 +293,7 @@ def verify_review_activity(collection, requirements, *, now=None):
             require(
                 meta["repository"] == collection["repository"]
                 and meta["pullRequestNumber"] == collection["pr"]
-                and meta["headSha"] == collection["head"]
+                and meta["headSha"] == review_head
                 and meta["status"] == "completed",
                 "Security review identity/status differs",
             )
@@ -299,7 +302,7 @@ def verify_review_activity(collection, requirements, *, now=None):
                 "kind": rule["kind"],
                 "comment_id": summary["id"],
                 "author_id": rule["author_id"],
-                "head": collection["head"],
+                "head": review_head,
                 "summary": summary["body"],
                 "resolved": resolved[0]["response"]["sha"],
             }
@@ -307,10 +310,14 @@ def verify_review_activity(collection, requirements, *, now=None):
     return {"result": "PASS", "evidence": evidence}
 
 
-def verify_all_reviews(collection, profile, *, now=None):
-    reviews = verify_reviews(collection, required_reviewers=profile["reviewers"], now=now)
+def verify_all_reviews(collection, profile, *, now=None, review_head=None):
+    reviews = verify_reviews(
+        collection, required_reviewers=profile["reviewers"], now=now, review_head=review_head
+    )
     activities = (
-        verify_review_activity(collection, profile["review_activity"], now=now)
+        verify_review_activity(
+            collection, profile["review_activity"], now=now, review_head=review_head
+        )
         if profile["review_activity"]
         else {"result": "PASS", "evidence": []}
     )

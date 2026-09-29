@@ -756,7 +756,11 @@ class NativeGitHubHost:
                 )
             }
         else:
-            reviews = verify_all_reviews(collection, self.profile)
+            # A source branch may advance after merge. Reviews settle the retained
+            # qualified candidate, while the observation keeps the live PR head.
+            reviews = verify_all_reviews(
+                collection, self.profile, review_head=state["head"] if merged else None
+            )
         coords = {
             "HEAD": collection["head"],
             "BASE": pr["base"]["sha"],

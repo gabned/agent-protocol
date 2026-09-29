@@ -180,7 +180,7 @@ def apply(state, event):
         )
         return
     require(
-        operation in {"RECONCILE_NOT_APPLIED", "ABANDON"}
+        operation in {"RECONCILE", "CLOSE", "RECONCILE_NOT_APPLIED", "ABANDON"}
         or event["expected_head"] == state["head"],
         "Unexpected candidate head",
     )

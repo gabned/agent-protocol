@@ -16,6 +16,13 @@ the write is not permission to repeat it. CLOSE requires observed post-merge
 delivery and one next action/location. The same operation ID/request reconciles
 to its existing event even after closure; changed content under that ID fails.
 
+The source branch may advance after a successful merge. RECONCILE and CLOSE
+record the freshly observed source head in the event without replacing the
+retained qualified head, its qualification or integration intent. Merge parents,
+tree and reviews still bind that retained candidate; post-merge checks bind the
+actual merge commit. CLOSE reobserves the same reconciled merge identity. New
+source commits receive no qualification or integration authority from settlement.
+
 RECONCILE_NOT_APPLIED settles an integration intent only with an independently
 authenticated NOT_DISPATCHED or DEFINITIVELY_REJECTED receipt. The receipt names
 the exact intent commit, operation, original head and workstream and establishes that no request

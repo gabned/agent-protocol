@@ -287,6 +287,7 @@ class PreconditionsTests(unittest.TestCase):
             )
             if operation == "RECONCILE":
                 obs["coordinates"]["PR_STATE"] = "MERGED"
+                obs["head"] = obs["coordinates"]["HEAD"] = request["expected_head"] = "9" * 40
                 obs["merge"] = {
                     "merge_sha": "e" * 40,
                     "base_sha": "b" * 40,
@@ -296,6 +297,7 @@ class PreconditionsTests(unittest.TestCase):
                     "qualified_tree": "f" * 40,
                 }
             if operation == "CLOSE":
+                obs["head"] = obs["coordinates"]["HEAD"] = request["expected_head"] = "8" * 40
                 obs["post_merge"] = {
                     "head": "e" * 40,
                     "result": "PASS",
@@ -307,6 +309,11 @@ class PreconditionsTests(unittest.TestCase):
                     "next_location": "new conversation",
                 }
             plan = self.evaluate(state, request, obs, authority)
+            if operation in {"RECONCILE", "CLOSE"}:
+                wrong = copy.deepcopy(obs)
+                wrong["merge"]["head_sha"] = obs["head"]
+                with self.assertRaises(ValueError):
+                    self.evaluate(state, request, wrong, authority)
             events.append(
                 {
                     "commit": str(index) * 40,
@@ -321,6 +328,9 @@ class PreconditionsTests(unittest.TestCase):
             )
         self.assertEqual(state["status"], "CLOSED")
         self.assertEqual(len(state["events"]), 5)
+        self.assertEqual(state["head"], "a" * 40)
+        self.assertEqual(state["merge"]["head_sha"], "a" * 40)
+        self.assertEqual(self.evaluate(state, request, {}, authority), plan)
 
     def test_closed_moved_head_can_be_abandoned_only_with_exact_observed_head_grant(self):
         for previous_status in ("ACTIVE", "QUALIFIED", "INTERRUPTED"):

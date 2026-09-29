@@ -244,8 +244,19 @@ class SignedJournalTests(unittest.TestCase):
         self.assertEqual(plan["event"]["expected_head"], "f" * 40)
 
         # The real post-merge native collector may run in different seconds.
-        collection["head"] = pr["head"]["sha"] = "a" * 40
+        collection["head"] = pr["head"]["sha"] = "9" * 40
         pr.update(merged=True, state="closed", body=original_body)
+        profile["reviewers"] = ["reviewer"]
+        native.profile["reviewers"] = ["reviewer"]
+        collection["reviewViewer"] = {
+            "url": "https://api.github.com/user",
+            "status": "OBSERVED",
+            "observed_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "response": {"id": 19, "login": "reviewer"},
+        }
+        collection["preflight"]["active_pull_request"]["reviews"]["items"] = [
+            {"id": 1, "user": {"login": "reviewer"}, "state": "APPROVED", "commit_id": "a" * 40}
+        ]
         collection["postMerge"] = copy.deepcopy(collection["ci"])
         post = collection["postMerge"]
         post["head_sha"] = "e" * 40
@@ -261,7 +272,7 @@ class SignedJournalTests(unittest.TestCase):
         request.update(
             operation="RECONCILE",
             operation_id="native-reconcile",
-            expected_head="a" * 40,
+            expected_head="9" * 40,
             parameters={},
         )
         plan = evaluate(state, request, native.observe(IDENTITY), authority)
@@ -271,10 +282,14 @@ class SignedJournalTests(unittest.TestCase):
             identity=IDENTITY,
             authenticated_commits={row["commit"]: "owner-a" for row in events},
         )
+        self.assertEqual(state["head"], "a" * 40)
+        self.assertEqual(state["merge"]["head_sha"], "a" * 40)
+        collection["head"] = pr["head"]["sha"] = "8" * 40
         request.update(
             operation="CLOSE",
             operation_id="native-close",
             expected_tip=state["tip"],
+            expected_head="8" * 40,
             parameters={"next_action": "Review the next objective", "next_location": "here"},
         )
         first_close = evaluate(state, request, native.observe(IDENTITY), authority)
@@ -283,6 +298,15 @@ class SignedJournalTests(unittest.TestCase):
         )
         second_close = evaluate(state, request, native.observe(IDENTITY), authority)
         self.assertTrue(same_plan(first_close, second_close))
+        wrong_merge = native.observe(IDENTITY)
+        wrong_merge["merge"]["merge_sha"] = "7" * 40
+        with self.assertRaisesRegex(ValueError, "reconciled merge identity"):
+            evaluate(state, request, wrong_merge, authority)
+        reviews = collection["preflight"]["active_pull_request"]["reviews"]["items"]
+        reviews[0]["commit_id"] = "8" * 40
+        with self.assertRaisesRegex(ValueError, "Post-merge delivery"):
+            evaluate(state, request, native.observe(IDENTITY), authority)
+        reviews[0]["commit_id"] = "a" * 40
         post["histories"][0]["jobs"][0]["response"]["jobs"][0]["conclusion"] = "failure"
         post["histories"][0]["attempt"]["response"]["conclusion"] = "failure"
         post["inventory"][0]["response"]["workflow_runs"][0]["conclusion"] = "failure"
