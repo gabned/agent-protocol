@@ -328,6 +328,16 @@ def verify_protocol_candidate(
         pr["number"] == collection["pr"] and pr["head"]["sha"] == collection["head"],
         "PR/head identity mismatch",
     )
+    for observed_pr in (pr, collection["final"][0]["response"]):
+        require(
+            re.findall(
+                r"(?m)^WORKSTREAM_CLASS:[ \t]*([^\r\n]+?)\r?$", observed_pr.get("body") or ""
+            )
+            == ["PROTOCOL"],
+            "Exactly one PROTOCOL workstream marker required",
+        )
+    # This marker is a required declaration, never identity, history or authority.
+    # Scope and effects below still come from independently accepted policy and Git.
     require(
         pr["base"]["repo"]["id"] == profile["repository_id"]
         and pr["base"]["repo"]["full_name"] == profile["repository"],

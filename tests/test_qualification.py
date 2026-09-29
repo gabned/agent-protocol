@@ -64,6 +64,7 @@ def protocol_fixture():
     repo = {"full_name": "example/synthetic", "id": 17}
     head, base, base_tree, head_tree = (c * 40 for c in "abcd")
     pr = {
+        "body": "WORKSTREAM_CLASS: PROTOCOL\n",
         "number": 4,
         "head": {"sha": head},
         "base": {"sha": base, "repo": repo},
@@ -226,7 +227,7 @@ class QualificationTests(unittest.TestCase):
         result = verify_protocol_candidate(collection, **args)
         self.assertEqual(result["result"], "PASS")
         self.assertFalse(result["write_authorized"])
-        for attack in ("mode", "scope", "parent", "repository", "stale-ci", "endpoint"):
+        for attack in ("mode", "scope", "parent", "repository", "stale-ci", "endpoint", "marker"):
             value = copy.deepcopy(collection)
             if attack == "mode":
                 value["trees"][0]["tree"]["response"]["tree"][0]["mode"] = "120000"
@@ -238,6 +239,8 @@ class QualificationTests(unittest.TestCase):
                 value["preflight"]["repo"]["response"]["id"] = 99
             elif attack == "stale-ci":
                 value["ci"]["inventory"][0]["observed_at"] = "2025-12-31T00:00:00Z"
+            elif attack == "marker":
+                value["final"][0]["response"]["body"] = "WORKSTREAM_CLASS: PRODUCT"
             else:
                 value["files"][0]["filename"] = "different.py"
             with self.subTest(attack=attack), self.assertRaises(ValueError):

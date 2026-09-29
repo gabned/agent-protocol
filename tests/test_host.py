@@ -7,11 +7,13 @@ import base64
 import copy
 import hashlib
 import json
+import os
 import subprocess
 import tempfile
 import unittest
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from test_ledger import IDENTITY, event, start
 from test_lifecycle import fixture
@@ -35,6 +37,8 @@ class SignedJournalTests(unittest.TestCase):
         collection = fresh(collection)
         pr = collection["preflight"]["active_pull_request"]["pr"]["response"]
         pr["head"].update(ref=IDENTITY["branch"], repo={"id": 17})
+        pr["base"].update(ref="main", repo={"id": 17, "full_name": IDENTITY["repository"]})
+        pr["merge_commit_sha"] = "e" * 40
         authority["policy"]["required_gates"] = [
             "CI",
             "NATIVE",
@@ -67,9 +71,22 @@ class SignedJournalTests(unittest.TestCase):
         def api(suffix, **kwargs):
             calls.append((suffix, kwargs))
             if suffix == "":
-                return {"full_name": IDENTITY["repository"], "id": 17, "default_branch": "main"}
+                return {
+                    "full_name": IDENTITY["repository"],
+                    "id": 17,
+                    "default_branch": "main",
+                    "node_id": "synthetic-node",
+                }
             if suffix == "/branches/main":
-                return {"commit": {"sha": "b" * 40}}
+                return {"commit": {"sha": "b" * 40}, "protected": False}
+            if suffix == "/rules/branches/main":
+                return []
+            if suffix.startswith("/git/commits/"):
+                return {
+                    "sha": suffix.rsplit("/", 1)[1],
+                    "tree": {"sha": "f" * 40},
+                    "parents": [{"sha": "b" * 40}, {"sha": "a" * 40}],
+                }
             if suffix.startswith("/contents/"):
                 return {
                     "sha": profile_blob,
@@ -80,12 +97,13 @@ class SignedJournalTests(unittest.TestCase):
                 return {"name": "SYNTHETIC_DEPLOY", "value": str(enabled[0]).lower()}
             if suffix == "/pulls/4":
                 return pr
-            if suffix == "/pulls/4/merge":
-                self.assertEqual(
-                    kwargs, {"method": "PUT", "payload": {"sha": "a" * 40, "merge_method": "merge"}}
-                )
-                return {"merged": True}
             self.fail("Unexpected API route: " + suffix)
+
+        mutations = []
+
+        def atomic(**kwargs):
+            mutations.append(kwargs)
+            return {"state": "REFS_UPDATED_RECONCILIATION_REQUIRED"}
 
         native = NativeGitHubHost.__new__(NativeGitHubHost)
         native.identity = IDENTITY
@@ -96,7 +114,7 @@ class SignedJournalTests(unittest.TestCase):
             "profile_blob": profile_blob,
             "account": {"id": 19, "login": "synthetic-operator"},
         }
-        native.api = SimpleNamespace(request=api)
+        native.api = SimpleNamespace(request=api, assert_account=lambda: None, atomic_merge=atomic)
         native.source_receipt = {"result": "BYTES_VERIFIED", "revision": authority["pin"]}
         native.journal = SimpleNamespace(read=lambda: state)
         native.collect_raw = lambda identity: copy.deepcopy(collection)
@@ -120,25 +138,99 @@ class SignedJournalTests(unittest.TestCase):
             "expected_base": "b" * 40,
             "method": "merge",
         }
-        self.assertTrue(native.merge(**args)["merged"])
-        count = sum(suffix.endswith("/merge") for suffix, _ in calls)
+        with self.assertRaisesRegex(ValueError, "durable integration intent"):
+            native.merge(**args)
+        native.journal = SimpleNamespace(
+            read=lambda: {
+                "status": "INTEGRATING",
+                "head": "a" * 40,
+                "coordinates": {"BASE": "b" * 40},
+                "tip": "c" * 40,
+            }
+        )
+        self.assertEqual(native.merge(**args)["state"], "REFS_UPDATED_RECONCILIATION_REQUIRED")
+        self.assertEqual(mutations[0]["expected_base"], "b" * 40)
+        self.assertEqual(mutations[0]["expected_head"], "a" * 40)
+        for route, replacement in (
+            ("/rules/branches/main", [{"type": "pull_request"}]),
+            ("/branches/main", {"commit": {"sha": "b" * 40}, "protected": True}),
+            (
+                "/git/commits/" + "e" * 40,
+                {"parents": [{"sha": "0" * 40}], "tree": {"sha": "f" * 40}},
+            ),
+        ):
+            native.api.request = lambda suffix, route=route, replacement=replacement: (
+                replacement if suffix == route else api(suffix)
+            )
+            with self.subTest(route=route), self.assertRaises(ValueError):
+                native.merge(**args)
+        native.api.request = api
+        count = len(mutations)
         enabled[0] = True
         with self.assertRaisesRegex(ValueError, "production-trigger"):
             native.merge(**args)
-        self.assertEqual(sum(suffix.endswith("/merge") for suffix, _ in calls), count)
+        self.assertEqual(len(mutations), count)
 
     def test_native_gh_transport_has_no_generic_write_or_cross_repository_route(self):
         calls = []
+        account = {"id": 19, "login": "synthetic-operator"}
+        remote = {"refs/heads/main": "b" * 40, "refs/heads/candidate": "a" * 40}
 
         def execute(args, **kwargs):
             calls.append((args, kwargs))
-            return SimpleNamespace(returncode=0, stdout='{"merged":true}')
+            self.assertEqual(kwargs["env"]["GH_TOKEN"], "synthetic-token")
+            if args[-1] == "user":
+                return SimpleNamespace(returncode=0, stdout=json.dumps(account))
+            payload = json.loads(kwargs["input"])["variables"]["input"]
+            updates = payload["refUpdates"]
+            self.assertTrue(all(row["force"] is False for row in updates))
+            if any(remote[row["name"]] != row["beforeOid"] for row in updates):
+                return SimpleNamespace(
+                    returncode=0, stdout='{"errors":[{"message":"reference changed"}]}'
+                )
+            remote.update({row["name"]: row["afterOid"] for row in updates})
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    {"data": {"updateRefs": {"clientMutationId": payload["clientMutationId"]}}}
+                ),
+            )
 
-        api = GitHubCLI("example/synthetic", directory=Path.cwd(), execute=execute)
-        api.request(
-            "/pulls/4/merge", method="PUT", payload={"sha": "a" * 40, "merge_method": "merge"}
+        with patch.dict(os.environ, {"GH_TOKEN": "synthetic-token"}):
+            api = GitHubCLI(
+                "example/synthetic", directory=Path.cwd(), expected_account=account, execute=execute
+            )
+        # Ambient auth switch cannot replace the enrolled transport's credential.
+        with patch.dict(os.environ, {"GH_TOKEN": "other-token"}):
+            api.assert_account()
+        args = dict(
+            repository_node_id="synthetic-node",
+            base_ref="refs/heads/main",
+            head_ref="refs/heads/candidate",
+            expected_base="b" * 40,
+            expected_head="a" * 40,
+            merge_sha="e" * 40,
+            intent_id="c" * 40,
         )
-        self.assertEqual(json.loads(calls[0][1]["input"])["sha"], "a" * 40)
+        for ref in remote:
+            original = remote[ref]
+            remote[ref] = "f" * 40
+            before = dict(remote)
+            with (
+                self.subTest(ref=ref),
+                self.assertRaisesRegex(ValueError, "reconcile existing intent"),
+            ):
+                api.atomic_merge(**args)
+            self.assertEqual(remote, before)
+            remote[ref] = original
+        self.assertEqual(api.atomic_merge(**args)["merge_sha"], "e" * 40)
+        self.assertEqual(remote, {"refs/heads/main": "e" * 40, "refs/heads/candidate": "a" * 40})
+        account["id"] = 20
+        before = len(calls)
+        with self.assertRaisesRegex(ValueError, "account changed"):
+            api.atomic_merge(**args)
+        self.assertEqual(len(calls), before + 1)  # Only authentication read, no mutation.
+        before = len(calls)
         for suffix, method in (
             ("/../other", "GET"),
             ("/%2e%2e/other", "GET"),
@@ -149,7 +241,7 @@ class SignedJournalTests(unittest.TestCase):
                 api.request(
                     suffix, method=method, payload={"sha": "a" * 40, "merge_method": "merge"}
                 )
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls), before)
 
     def test_typed_host_never_repeats_uncertain_merge_and_closes_idempotently(self):
         with tempfile.TemporaryDirectory(prefix="protocol-host-") as temporary:

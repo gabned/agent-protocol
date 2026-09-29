@@ -151,7 +151,7 @@ def evaluate(state, request, observation, authority, *, now=None):
         {"MERGED"}
         if operation in {"RECONCILE", "CLOSE"}
         else {"OPEN", "CLOSED"}
-        if operation == "ABANDON"
+        if operation in {"ABANDON", "RECONCILE_NOT_APPLIED"}
         else {"OPEN"}
     )
     require(current["PR_STATE"] in allowed_pr_states, "Unexpected PR state for operation")
@@ -283,7 +283,7 @@ def evaluate(state, request, observation, authority, *, now=None):
             grant = authority["grants"].get(p["grant"])
             exact(
                 grant,
-                "operation identity intent_tip intent_operation kind source quiescent",
+                "operation identity intent_tip intent_operation intent_head kind source quiescent",
                 "independently authenticated non-execution",
             )
             require(
@@ -291,6 +291,7 @@ def evaluate(state, request, observation, authority, *, now=None):
                 and grant["identity"] == state["identity"]
                 and grant["intent_tip"] == intent["commit"]
                 and grant["intent_operation"] == intent["event"]["operation_id"]
+                and grant["intent_head"] == intent["event"]["expected_head"]
                 and grant["kind"] in {"NOT_DISPATCHED", "DEFINITIVELY_REJECTED"}
                 and grant["source"]
                 and grant["quiescent"] is True
@@ -299,6 +300,7 @@ def evaluate(state, request, observation, authority, *, now=None):
             )
             payload = {
                 "intent_operation": intent["event"]["operation_id"],
+                "intent_head": intent["event"]["expected_head"],
                 "non_execution": deepcopy(grant),
                 "coordinates": current,
             }

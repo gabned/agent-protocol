@@ -66,7 +66,13 @@ candidate checkouts. It has schema `agent-host-enrollment/v1` and contains:
 
 These fields do not enroll themselves. The authorized native adapter or operator
 establishes their authority before invocation. The package does not generate keys,
-obtain tokens, broaden account permissions or create approval grants. A connector
+enroll accounts, broaden permissions or create approval grants. It binds the existing
+enrolled account's supported `gh auth token --user` credential in operator memory
+(or verifies the supplied host environment credential). The same bound environment
+serves reads, collection, HTTPS journal pushes and integration; changing the ambient
+active gh account cannot switch the actor mid-operation. Credentials never enter
+command arguments, journal events or artifacts. Fresh account identity is checked
+at collection and integration boundaries. A connector
 without signed-journal host capabilities can collect and explain; it must hand the
 typed operation to an enrolled host and cannot substitute unsigned Git commits.
 
@@ -78,8 +84,22 @@ Protocol host requires CI, native CI, reviews, effects, ancestry, source and aut
 evidence. It does not replace PRODUCT qualification: PRODUCT adapters retain their
 accepted local policy and use the shared `ProtocolHost` evaluator/executor boundary.
 
-The only GitHub write in this adapter is a normal expected-head merge of its
-enrolled PR. Journal pushes target the same repository without credentials in URLs.
+The adapter integrates only its enrolled PR and publishes its signed journal.
+Journal pushes use the same bound GitHub credential over HTTPS, with no URL secrets.
+For integration it verifies GitHub's existing two-parent merge preview against the
+qualified base, head and tree, then uses GitHub's atomic `updateRefs` with both
+expected refs and `force: false`. The candidate ref is a no-op expected-head guard;
+the default ref advances to that exact normal merge commit. A concurrent update of
+either ref rejects the transaction. A REST merge's head-only `sha` precondition
+cannot provide this base guarantee and is not substituted. See the supported
+[atomic Git ref contract](https://docs.github.com/en/graphql/reference/git#updaterefs).
+
+This native route refuses protected base branches, any active base rules, or an
+unavailable rules inventory. It cannot be used as a bypass for PR rules or queues;
+those repositories require an independently accepted atomic native adapter. All
+Protocol CI and review gates remain mandatory even on unprotected branches.
+An atomic-write response is not a delivery receipt: observe the actual PR's indirect
+merge recognition, exact parents/tree and post-merge CI before reconciliation.
 Merge intent is durable first; a retry of that intent never sends another merge.
 Live production conditions are checked again immediately before dispatch. Reopening
 a host after integration can read the accepted profile from verified default-branch

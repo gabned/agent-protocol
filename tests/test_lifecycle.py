@@ -144,6 +144,7 @@ class PreconditionsTests(unittest.TestCase):
             "identity": IDENTITY,
             "intent_tip": state["tip"],
             "intent_operation": "recovery-integrate",
+            "intent_head": "a" * 40,
             "kind": "DEFINITIVELY_REJECTED",
             "source": "authenticated:api-rejection",
             "quiescent": True,
@@ -185,6 +186,92 @@ class PreconditionsTests(unittest.TestCase):
         request["parameters"]["force"] = True
         with self.assertRaisesRegex(ValueError, "different request"):
             self.evaluate(state, request, {}, auth)
+
+    def test_rejected_integration_recovers_moved_head_and_closed_pr_without_rewriting_intent(self):
+        for pr_state in ("OPEN", "CLOSED"):
+            with self.subTest(pr_state=pr_state):
+                state, request, obs, auth = fixture()
+                auth["operations"] += ["RECONCILE_NOT_APPLIED", "ABANDON"]
+                obs["coordinates"]["AUTHORITY"] = digest(
+                    {
+                        k: auth[k]
+                        for k in (
+                            "identity",
+                            "principal",
+                            "operations",
+                            "capabilities",
+                            "signer_registry",
+                        )
+                    }
+                )
+                events = []
+
+                def append(
+                    operation,
+                    index,
+                    parameters=None,
+                    *,
+                    request=request,
+                    obs=obs,
+                    auth=auth,
+                    events=events,
+                ):
+                    nonlocal state
+                    request.update(
+                        operation=operation,
+                        operation_id="moved-" + operation.lower(),
+                        expected_tip=state["tip"],
+                        expected_head=obs["head"],
+                        parameters=parameters or {},
+                    )
+                    plan = self.evaluate(state, request, obs, auth)
+                    events.append(
+                        {
+                            "commit": str(index) * 40,
+                            "parents": [state["tip"]] if state["tip"] else [],
+                            "event": plan["event"],
+                        }
+                    )
+                    state = replay(
+                        events,
+                        identity=IDENTITY,
+                        authenticated_commits={e["commit"]: "owner-a" for e in events},
+                    )
+                    return plan
+
+                for index, operation in enumerate(("START", "QUALIFY", "INTEGRATE"), 1):
+                    append(operation, index)
+                original = copy.deepcopy(state["events"][2])
+                auth["grants"]["rejected"] = {
+                    "operation": "RECONCILE_NOT_APPLIED",
+                    "identity": IDENTITY,
+                    "intent_tip": state["tip"],
+                    "intent_operation": "moved-integrate",
+                    "intent_head": "a" * 40,
+                    "kind": "DEFINITIVELY_REJECTED",
+                    "source": "authenticated:atomic-ref-rejection",
+                    "quiescent": True,
+                }
+                obs["head"] = obs["coordinates"]["HEAD"] = "f" * 40
+                obs["coordinates"]["PR_STATE"] = pr_state
+                plan = append("RECONCILE_NOT_APPLIED", 4, {"grant": "rejected"})
+                self.assertEqual(state["head"], "f" * 40)
+                self.assertEqual(state["status"], "ACTIVE")
+                self.assertIsNone(state["qualification"])
+                self.assertEqual(state["events"][2], original)
+                self.assertEqual(self.evaluate(state, request, {}, auth), plan)
+                if pr_state == "CLOSED":
+                    auth["grants"]["abandon"] = {
+                        "operation": "ABANDON",
+                        "identity": IDENTITY,
+                        "owner": "owner-a",
+                        "tip": state["tip"],
+                        "head": state["head"],
+                    }
+                    append(
+                        "ABANDON", 5, {"reason": "Closed without integration", "grant": "abandon"}
+                    )
+                    self.assertEqual(state["status"], "ABANDONED")
 
     def test_start_qualify_integration_reconciliation_close(self):
         state, request, obs, authority = fixture()

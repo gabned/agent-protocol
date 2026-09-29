@@ -179,7 +179,10 @@ def apply(state, event):
             status="INTERRUPTED" if state["status"] == "INTERRUPTED" else "ACTIVE",
         )
         return
-    require(event["expected_head"] == state["head"], "Unexpected candidate head")
+    require(
+        operation == "RECONCILE_NOT_APPLIED" or event["expected_head"] == state["head"],
+        "Unexpected candidate head",
+    )
     if operation == "INTERRUPT":
         exact(payload, "reason material", "interrupt")
         require(
@@ -239,16 +242,25 @@ def apply(state, event):
             sha(value)
         state.update(status="INTEGRATED", merge=deepcopy(payload))
     elif operation == "RECONCILE_NOT_APPLIED":
-        exact(payload, "intent_operation non_execution coordinates", "non-execution reconciliation")
+        exact(
+            payload,
+            "intent_operation intent_head non_execution coordinates",
+            "non-execution reconciliation",
+        )
         prior = state["operations"].get(payload["intent_operation"], {})
         require(
             state["status"] == "INTEGRATING"
             and prior.get("operation") == "INTEGRATE"
+            and prior["expected_head"] == payload["intent_head"] == state["head"]
+            and payload["coordinates"]["HEAD"] == event["expected_head"]
             and payload["non_execution"],
             "Non-execution must settle the retained integration intent",
         )
         state.update(
-            status="ACTIVE", qualification=None, coordinates=deepcopy(payload["coordinates"])
+            status="ACTIVE",
+            qualification=None,
+            coordinates=deepcopy(payload["coordinates"]),
+            head=event["expected_head"],
         )
     elif operation == "CLOSE":
         exact(payload, "post_merge_evidence next_action next_location", "closure")

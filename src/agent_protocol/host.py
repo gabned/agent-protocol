@@ -37,9 +37,20 @@ def same_plan(left, right):
 
 
 class GitJournal:
-    def __init__(self, directory, identity, allowed_signers, *, required_ancestor=None):
+    def __init__(
+        self,
+        directory,
+        identity,
+        allowed_signers,
+        *,
+        required_ancestor=None,
+        environment=None,
+        git_config=(),
+    ):
         self.directory = Path(directory).resolve()
         self.identity = identity
+        self.environment = dict(os.environ if environment is None else environment)
+        self.git_config = tuple(git_config)
         self.ref = f"refs/heads/agent-protocol/work/pr-{identity['pr']}"
         require(
             isinstance(allowed_signers, str) and allowed_signers.strip(),
@@ -86,12 +97,12 @@ class GitJournal:
     def git(self, *argv, data=None, config=(), allow_failure=False):
         env = {
             k: v
-            for k, v in os.environ.items()
+            for k, v in self.environment.items()
             if not k.startswith("GIT_") or k in {"GIT_SSH", "GIT_SSH_COMMAND", "GIT_ASKPASS"}
         }
         env["GIT_NO_REPLACE_OBJECTS"] = "1"
         command = ["git", "--no-replace-objects", "-C", str(self.directory)]
-        for key, value in config:
+        for key, value in (*self.git_config, *config):
             command += ["-c", key + "=" + value]
         process = subprocess.run([*command, *argv], input=data, capture_output=True, env=env)
         if not allow_failure:
@@ -348,10 +359,42 @@ class ProtocolHost:
 class GitHubCLI:
     """Supported gh authentication with a closed repository and one merge capability."""
 
-    def __init__(self, repository, *, directory, execute=None):
+    def __init__(self, repository, *, directory, expected_account, execute=None):
         require(re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository), "Invalid repository")
         self.repository, self.directory = repository, Path(directory).resolve()
         self.execute = execute or subprocess.run
+        exact(expected_account, "id login", "enrolled GitHub account")
+        self.expected_account = deepcopy(expected_account)
+        self.environment = dict(os.environ)
+        self.environment.pop("GH_DEBUG", None)
+        token = self.environment.get("GH_TOKEN") or self.environment.get("GITHUB_TOKEN")
+        if not token:
+            selected = self.execute(
+                [
+                    "gh",
+                    "auth",
+                    "token",
+                    "--hostname",
+                    "github.com",
+                    "--user",
+                    expected_account["login"],
+                ],
+                capture_output=True,
+                text=True,
+                cwd=self.directory,
+                timeout=120,
+                env=self.environment,
+            )
+            require(
+                selected.returncode == 0 and selected.stdout.strip(),
+                "Enrolled GitHub login unavailable",
+            )
+            token = selected.stdout.strip()
+        # The supported credential is kept only in the trusted operator process
+        # and child gh/Git environment. It never enters argv, files or receipts.
+        self.environment["GH_TOKEN"] = token
+        self.environment.pop("GITHUB_TOKEN", None)
+        self.assert_account()
 
     def request(self, suffix, *, method="GET", payload=None):
         require(
@@ -362,14 +405,7 @@ class GitHubCLI:
             and "#" not in suffix,
             "Invalid scoped GitHub route",
         )
-        require(method in {"GET", "PUT"}, "Unsupported host effect")
-        if method == "PUT":
-            require(
-                re.fullmatch(r"/pulls/[1-9][0-9]*/merge", suffix), "Only normal merge supported"
-            )
-            exact(payload, "sha merge_method", "merge request")
-            sha(payload["sha"])
-            require(payload["merge_method"] == "merge", "Only normal merge supported")
+        require(method == "GET" and payload is None, "Only scoped reads supported by this route")
         args = [
             "gh",
             "api",
@@ -388,6 +424,7 @@ class GitHubCLI:
             text=True,
             cwd=self.directory,
             timeout=120,
+            env=self.environment,
         )
         # gh may include diagnostic context. Do not expose auth environment or raw stderr.
         require(result.returncode == 0, "GitHub operation unavailable; reconcile before retry")
@@ -400,9 +437,91 @@ class GitHubCLI:
             text=True,
             cwd=self.directory,
             timeout=120,
+            env=self.environment,
         )
         require(result.returncode == 0, "Supported GitHub login required on the operator host")
         return json.loads(result.stdout)
+
+    def assert_account(self):
+        account = self.account()
+        require(
+            {"id": account["id"], "login": account["login"]} == self.expected_account,
+            "Authenticated account changed from enrollment",
+        )
+
+    def atomic_merge(
+        self,
+        *,
+        repository_node_id,
+        base_ref,
+        head_ref,
+        expected_base,
+        expected_head,
+        merge_sha,
+        intent_id,
+    ):
+        self.assert_account()
+        require(
+            base_ref != head_ref
+            and all(
+                isinstance(ref, str) and ref.startswith("refs/heads/")
+                for ref in (base_ref, head_ref)
+            ),
+            "Exact distinct branch refs required",
+        )
+        require(
+            all(sha(value) != "0" * 40 for value in (expected_base, expected_head, merge_sha)),
+            "Ref creation/deletion is not an integration capability",
+        )
+        require(merge_sha not in {expected_base, expected_head}, "Normal merge commit required")
+        mutation = "mutation($input:UpdateRefsInput!){updateRefs(input:$input){clientMutationId}}"
+        payload = {
+            "query": mutation,
+            "variables": {
+                "input": {
+                    "repositoryId": repository_node_id,
+                    "clientMutationId": intent_id,
+                    "refUpdates": [
+                        {
+                            "name": base_ref,
+                            "beforeOid": expected_base,
+                            "afterOid": merge_sha,
+                            "force": False,
+                        },
+                        {
+                            "name": head_ref,
+                            "beforeOid": expected_head,
+                            "afterOid": expected_head,
+                            "force": False,
+                        },
+                    ],
+                }
+            },
+        }
+        result = self.execute(
+            ["gh", "api", "--hostname", "github.com", "graphql", "--input", "-"],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            cwd=self.directory,
+            timeout=120,
+            env=self.environment,
+        )
+        require(
+            result.returncode == 0,
+            "Atomic integration response unavailable; reconcile existing intent",
+        )
+        response = json.loads(result.stdout)
+        require(
+            not response.get("errors")
+            and response.get("data", {}).get("updateRefs", {}).get("clientMutationId") == intent_id,
+            "Atomic integration not confirmed; reconcile existing intent",
+        )
+        return {
+            "state": "REFS_UPDATED_RECONCILIATION_REQUIRED",
+            "merge_sha": merge_sha,
+            "intent": intent_id,
+        }
 
 
 class NativeGitHubHost:
@@ -434,7 +553,9 @@ class NativeGitHubHost:
             "Use the accepted native PRODUCT adapter",
         )
         self.api = api or GitHubCLI(
-            self.identity["repository"], directory=enrollment["journal_directory"]
+            self.identity["repository"],
+            directory=enrollment["journal_directory"],
+            expected_account=enrollment["account"],
         )
         account = self.api.account()
         require(
@@ -446,10 +567,16 @@ class NativeGitHubHost:
             self.identity,
             enrollment["public_signers"],
             required_ancestor=enrollment["required_ancestor"],
+            environment=self.api.environment,
+            git_config=(
+                ("credential.helper", ""),
+                ("credential.https://github.com.helper", "!gh auth git-credential"),
+                ("credential.interactive", "false"),
+            ),
         )
         remotes = self.journal.git("remote", "get-url", "--all", "origin").decode().splitlines()
         repository = self.identity["repository"]
-        permitted = {f"https://github.com/{repository}.git", f"git@github.com:{repository}.git"}
+        permitted = {f"https://github.com/{repository}.git"}
         require(
             len(remotes) == 1 and remotes[0] in permitted,
             "Journal origin must identify the exact enrolled repository without URL credentials",
@@ -556,6 +683,7 @@ class NativeGitHubHost:
             capture_output=True,
             text=True,
             timeout=600,
+            env=self.api.environment,
         )
         require(
             result.returncode == 0, "Complete native collection failed; inspect operator evidence"
@@ -581,6 +709,7 @@ class NativeGitHubHost:
 
     def observe(self, identity):
         require(identity == self.identity, "Host identity changed")
+        self.api.assert_account()
         self.check_effects(self.profile)
         collection = self.collect_raw(identity)
         active = collection["preflight"]["active_pull_request"]
@@ -735,18 +864,59 @@ class NativeGitHubHost:
 
     def merge(self, *, identity, expected_head, expected_base, method):
         require(identity == self.identity and method == "merge", "Unknown merge authority")
+        self.api.assert_account()
         self.check_effects(self.profile)
+        state = self.journal.read()
+        require(
+            state["status"] == "INTEGRATING"
+            and state["head"] == expected_head
+            and state["coordinates"]["BASE"] == expected_base,
+            "Exact durable integration intent required",
+        )
+        repository = self.api.request("")
+        require(
+            (repository["full_name"], repository["id"])
+            == (identity["repository"], identity["repository_id"]),
+            "Repository identity changed",
+        )
         pr = self.api.request(f"/pulls/{identity['pr']}")
         require(
             pr["state"] == "open"
             and not pr["draft"]
             and pr["mergeable"] is True
             and pr["head"]["sha"] == expected_head
-            and pr["base"]["sha"] == expected_base,
+            and pr["base"]["sha"] == expected_base
+            and pr["head"]["ref"] == identity["branch"]
+            and pr["base"]["ref"] == repository["default_branch"]
+            and pr["head"]["repo"]["id"] == pr["base"]["repo"]["id"] == identity["repository_id"],
             "Merge coordinates changed before write",
         )
-        return self.api.request(
-            f"/pulls/{identity['pr']}/merge",
-            method="PUT",
-            payload={"sha": expected_head, "merge_method": "merge"},
+        base_name = quote(repository["default_branch"], safe="")
+        branch = self.api.request("/branches/" + base_name)
+        # Indirect merge must never be an escape from PR protections/rulesets.
+        # Unknown/inaccessible rule inventory also refuses this transport.
+        require(
+            branch["protected"] is False and self.api.request("/rules/branches/" + base_name) == [],
+            "Protected integration requires an accepted atomic native adapter",
+        )
+        require(branch["commit"]["sha"] == expected_base, "Base advanced before integration")
+        merged = self.api.request("/git/commits/" + sha(pr["merge_commit_sha"]))
+        candidate = self.api.request("/git/commits/" + sha(expected_head))
+        require(
+            [p["sha"] for p in merged["parents"]] == [expected_base, expected_head]
+            and merged["tree"]["sha"] == candidate["tree"]["sha"],
+            "GitHub merge preview differs from qualified parents/tree",
+        )
+        # REST merge's `sha` guards only the PR head. GitHub updateRefs guards
+        # both refs atomically, without force, using the existing two-parent
+        # merge object. The head no-op is an expected-value guard, not a rewrite.
+        # Only subsequent actual PR/commit/post-CI observation establishes merge.
+        return self.api.atomic_merge(
+            repository_node_id=repository["node_id"],
+            base_ref="refs/heads/" + repository["default_branch"],
+            head_ref="refs/heads/" + identity["branch"],
+            expected_base=expected_base,
+            expected_head=expected_head,
+            merge_sha=merged["sha"],
+            intent_id=state["tip"],
         )

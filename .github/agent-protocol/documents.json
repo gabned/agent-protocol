@@ -51,7 +51,7 @@
     },
     {
       "path": "docs/agent-protocol/lifecycle.md",
-      "sha256": "1365ab26310a9a03c7d27bbcec75a05b98446e0e61a0d270823c4cf7f9b4a484",
+      "sha256": "ecc3198d0143e009314314710e29f1a69461658b940ba8a7a449389ceda49354",
       "phases": [
         "START",
         "RECOVER",
@@ -89,7 +89,7 @@
     },
     {
       "path": "docs/agent-protocol/hosts.md",
-      "sha256": "307ac8683e23f5b4c7085ce056fa8fa5b422ec84b4e526c4303fa04069af55f3",
+      "sha256": "f3d3b0c743b285ecbe598acb641726a6de0625f6e1f2d27c8aa7f5b6d7af5b23",
       "phases": [
         "START",
         "RECOVER",

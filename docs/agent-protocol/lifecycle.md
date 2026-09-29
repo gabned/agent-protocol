@@ -18,10 +18,14 @@ to its existing event even after closure; changed content under that ID fails.
 
 RECONCILE_NOT_APPLIED settles an integration intent only with an independently
 authenticated NOT_DISPATCHED or DEFINITIVELY_REJECTED receipt. The receipt names
-the exact intent commit, operation and workstream and establishes that no request
+the exact intent commit, operation, original head and workstream and establishes that no request
 remains in flight. An open PR, timeout, elapsed time or repeated error is not that
 proof. The operation retains the intent and receipt, returns to ACTIVE and clears
-qualification. A new integration needs new qualifying evidence; unchanged
+qualification. The current observed head may have advanced since the rejected
+intent; recovery records that new head while retaining the old intent head and
+history. A closed, unmerged PR can also settle conclusive non-execution before a
+separately authorized abandonment. Neither case grants integration. A new
+integration needs new qualifying evidence; unchanged
 deterministic evidence still fails the anti-loop check. An uncertain dispatch
 stays INTEGRATING until an actual merge or a conclusive non-execution receipt is
 observed. No generic reset or user-supplied success override exists.
