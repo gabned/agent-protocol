@@ -38,10 +38,13 @@ class SignedJournalTests(unittest.TestCase):
         collection = fresh(collection)
         collection["preflight"]["repo"]["response"]["default_branch"] = "main"
         pr = collection["preflight"]["active_pull_request"]["pr"]["response"]
-        pr["head"].update(ref=IDENTITY["branch"], repo={"id": 17})
+        pr["head"].update(
+            ref=IDENTITY["branch"], repo={"id": 17, "full_name": IDENTITY["repository"]}
+        )
         pr["base"].update(ref="main", repo={"id": 17, "full_name": IDENTITY["repository"]})
         pr["merge_commit_sha"] = "e" * 40
         pr["comments"] = 1
+        collection["final"][0]["response"] = pr
 
         def provider_summary(head):
             return (
@@ -236,6 +239,30 @@ class SignedJournalTests(unittest.TestCase):
             native.merge(**args)
         self.assertEqual(len(mutations), count)
         enabled[0] = False
+        native.journal = original_journal
+        for late_change in ("base-ref", "draft", "mergeable"):
+            synchronized.clear()
+
+            def change_pr_during_sync(late_change=late_change):
+                synchronized.append(True)
+                if len(synchronized) == 2:
+                    if late_change == "base-ref":
+                        pr["base"]["ref"] = "different-default"
+                    elif late_change == "draft":
+                        pr["draft"] = True
+                    else:
+                        pr["mergeable"] = False
+
+            native.journal = SimpleNamespace(
+                read=original_journal.read, synchronize=change_pr_during_sync
+            )
+            with (
+                self.subTest(late_change=late_change),
+                self.assertRaisesRegex(ValueError, "Merge coordinates changed"),
+            ):
+                native.merge(**args)
+            self.assertEqual(len(mutations), count)
+            pr["base"]["ref"], pr["draft"], pr["mergeable"] = "main", False, True
         native.journal = original_journal
         native.api.request = lambda suffix: (
             {"commit": {"sha": "0" * 40}, "protected": True}

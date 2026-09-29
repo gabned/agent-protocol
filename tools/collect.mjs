@@ -20,7 +20,11 @@ export async function collectLifecycle({repository, repositoryId, pr, fetchJson,
   const active = preflight.active_pull_request;
   if (identity.id !== repositoryId || active.pr.status !== 'OBSERVED' ||
       active.pr.response.number !== pr || active.pr.response.base?.repo?.id !== repositoryId ||
-      active.pr.response.base?.repo?.full_name !== repository) throw Error('Repository/PR identity mismatch');
+      active.pr.response.base?.repo?.full_name !== repository ||
+      active.pr.response.base?.ref !== identity.default_branch ||
+      typeof active.pr.response.head?.ref !== 'string' ||
+      !Number.isSafeInteger(active.pr.response.head?.repo?.id) ||
+      typeof active.pr.response.head?.repo?.full_name !== 'string') throw Error('Repository/PR identity mismatch');
   if (!active.reviews.complete || active.threads.status !== 'OBSERVED') {
     throw Error('Complete reviews and threads required; absence is not proof');
   }
@@ -99,7 +103,13 @@ export async function collectLifecycle({repository, repositoryId, pr, fetchJson,
     const row = {url, response, status:'OBSERVED', observed_at:now()};
     await persistObservation(row); observations.push(row);
   }
-  if (observations[0].response.head?.sha !== head || observations[1].response.commit?.sha !== before ||
+  const finalPr = observations[0].response, initialPr = active.pr.response;
+  const sameEndpoint = side => ['sha','ref'].every(k => finalPr[side]?.[k] === initialPr[side]?.[k]) &&
+    ['id','full_name'].every(k => finalPr[side]?.repo?.[k] === initialPr[side]?.repo?.[k]);
+  if (finalPr.number !== pr || !sameEndpoint('head') || !sameEndpoint('base') ||
+      finalPr.base?.ref !== identity.default_branch ||
+      finalPr.draft !== initialPr.draft || finalPr.mergeable !== initialPr.mergeable ||
+      observations[0].response.head?.sha !== head || observations[1].response.commit?.sha !== before ||
       observations[0].response.state !== active.pr.response.state ||
       observations[0].response.merged !== active.pr.response.merged ||
       observations[0].response.merge_commit_sha !== active.pr.response.merge_commit_sha ||

@@ -734,9 +734,9 @@ class NativeGitHubHost:
         """Bounded identity-only reads; recovery never depends on review/CI access."""
         repository = deepcopy(self.api.request(""))
         pr = deepcopy(self.api.request(f"/pulls/{identity['pr']}"))
-        branch = deepcopy(self.api.request(
-            "/branches/" + quote(repository["default_branch"], safe="")
-        ))
+        branch = deepcopy(
+            self.api.request("/branches/" + quote(repository["default_branch"], safe=""))
+        )
         final_pr = self.api.request(f"/pulls/{identity['pr']}")
         require(
             (repository["full_name"], repository["id"])
@@ -750,8 +750,10 @@ class NativeGitHubHost:
         )
         return {
             "head": pr["head"]["sha"],
-            "preflight": {"repo": {"response": repository},
-                          "active_pull_request": {"pr": {"response": pr}}},
+            "preflight": {
+                "repo": {"response": repository},
+                "active_pull_request": {"pr": {"response": pr}},
+            },
             "final": [{"response": final_pr}, {"response": branch}],
         }
 
@@ -948,18 +950,28 @@ class NativeGitHubHost:
             == (identity["repository"], identity["repository_id"]),
             "Repository identity changed",
         )
-        pr = self.api.request(f"/pulls/{identity['pr']}")
-        require(
-            pr["state"] == "open"
-            and not pr["draft"]
-            and pr["mergeable"] is True
-            and pr["head"]["sha"] == expected_head
-            and pr["base"]["sha"] == expected_base
-            and pr["head"]["ref"] == identity["branch"]
-            and pr["base"]["ref"] == repository["default_branch"]
-            and pr["head"]["repo"]["id"] == pr["base"]["repo"]["id"] == identity["repository_id"],
-            "Merge coordinates changed before write",
-        )
+
+        def check_pr():
+            pr = self.api.request(f"/pulls/{identity['pr']}")
+            require(
+                pr["number"] == identity["pr"]
+                and pr["state"] == "open"
+                and pr["draft"] is False
+                and pr["mergeable"] is True
+                and pr["head"]["sha"] == expected_head
+                and pr["base"]["sha"] == expected_base
+                and pr["head"]["ref"] == identity["branch"]
+                and pr["base"]["ref"] == repository["default_branch"]
+                and pr["head"]["repo"]["id"]
+                == pr["base"]["repo"]["id"]
+                == identity["repository_id"]
+                and pr["head"]["repo"]["full_name"]
+                == pr["base"]["repo"]["full_name"]
+                == identity["repository"],
+                "Merge coordinates changed before write",
+            )
+
+        check_pr()
         branch = self.api.request("/branches/" + quote(repository["default_branch"], safe=""))
         require(branch["commit"]["sha"] == expected_base, "Base advanced before integration")
         # Repeat all mutable qualification after the durable intent, at the effect
@@ -984,5 +996,6 @@ class NativeGitHubHost:
         )
         # Synchronization can wait on a remote transport. Reobserve mutable
         # production conditions after it, at the final effect boundary.
+        check_pr()
         self.check_effects(self.profile)
         return self.api.merge_pull_request(number=identity["pr"], expected_head=expected_head)

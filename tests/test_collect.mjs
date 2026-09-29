@@ -32,7 +32,8 @@ test('native reader confines API routes and completes nested review comment page
 });
 function harness() {
   const repo = {full_name:repository, id:17, default_branch:'main'};
-  const pr = {number:4, state:'open', head:{sha:head}, base:{sha:base,repo}, commits:1,
+  const pr = {number:4, state:'open', draft:false, mergeable:true,
+    head:{sha:head,ref:'codex/synthetic',repo}, base:{sha:base,ref:'main',repo}, commits:1,
     changed_files:1,comments:0,review_comments:0};
   const observations = [];
   const responses = {
@@ -116,16 +117,25 @@ test('provider short review identities are resolved by the authenticated reposit
   assert.equal(result.reviewReferences[0].response.sha,head);
 });
 test('identity, review completeness, pagination and changed head fail closed',async()=>{
-  for(const attack of ['identity','threads','pagination','head']) {
+  for(const attack of ['identity','threads','pagination','head','base-ref','base-repo','head-ref','head-repo','number','draft','mergeable']) {
     const {options,responses}=harness();
     if(attack==='identity') options.repositoryId=18;
     if(attack==='threads') options.fetchReviewThreads=async()=>({threads:[]});
     if(attack==='pagination') responses['/pulls/4'].changed_files=2;
-    if(attack==='head') {
+    if(['head','base-ref','base-repo','head-ref','head-repo','number','draft','mergeable'].includes(attack)) {
       const original=options.fetchJson; let calls=0;
       options.fetchJson=async url=>{
         const value=await original(url);
-        if(url.endsWith('/pulls/4') && ++calls===2) value.head.sha='f'.repeat(40);
+        if(url.endsWith('/pulls/4') && ++calls===2) {
+          if(attack==='head') value.head.sha='f'.repeat(40);
+          if(attack==='base-ref') value.base.ref='other-default';
+          if(attack==='base-repo') value.base.repo.id=99;
+          if(attack==='head-ref') value.head.ref='different-source';
+          if(attack==='head-repo') value.head.repo.full_name='example/different';
+          if(attack==='number') value.number=5;
+          if(attack==='draft') value.draft=true;
+          if(attack==='mergeable') value.mergeable=false;
+        }
         return value;
       };
     }

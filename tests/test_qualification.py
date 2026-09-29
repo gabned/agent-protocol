@@ -61,13 +61,13 @@ def inventory():
 
 def protocol_fixture():
     stamp = "2026-01-01T00:00:00Z"
-    repo = {"full_name": "example/synthetic", "id": 17}
+    repo = {"full_name": "example/synthetic", "id": 17, "default_branch": "main"}
     head, base, base_tree, head_tree = (c * 40 for c in "abcd")
     pr = {
         "body": "WORKSTREAM_CLASS: PROTOCOL\n",
         "number": 4,
-        "head": {"sha": head},
-        "base": {"sha": base, "repo": repo},
+        "head": {"sha": head, "ref": "codex/synthetic", "repo": repo},
+        "base": {"sha": base, "ref": "main", "repo": repo},
         "state": "open",
         "draft": False,
         "mergeable": True,
@@ -254,6 +254,43 @@ class QualificationTests(unittest.TestCase):
                 value["files"][0]["filename"] = "different.py"
             with self.subTest(attack=attack), self.assertRaises(ValueError):
                 verify_protocol_candidate(value, **args)
+
+    def test_final_pr_identity_and_readiness_cannot_be_discarded(self):
+        collection, profile = protocol_fixture()
+        args = {
+            "accepted_profile": profile,
+            "expected_profile_digest": digest(profile),
+            "now": datetime(2026, 1, 1, tzinfo=UTC),
+        }
+        for attack in ("base-ref", "base-repo", "head-ref", "head-repo", "number"):
+            value = copy.deepcopy(collection)
+            final = copy.deepcopy(value["final"][0]["response"])
+            value["final"][0]["response"] = final
+            if attack == "base-ref":
+                final["base"]["ref"] = "different-default"
+            elif attack == "base-repo":
+                final["base"]["repo"] = {"id": 99, "full_name": "example/different"}
+            elif attack == "head-ref":
+                final["head"]["ref"] = "different-source"
+            elif attack == "head-repo":
+                final["head"]["repo"] = {"id": 99, "full_name": "example/different"}
+            else:
+                final["number"] = 5
+            with (
+                self.subTest(attack=attack),
+                self.assertRaisesRegex(ValueError, "endpoint identity"),
+            ):
+                verify_protocol_candidate(value, **args)
+        for field, change in (("draft", True), ("mergeable", False), ("mergeable", None)):
+            value = copy.deepcopy(collection)
+            value["final"][0]["response"] = copy.deepcopy(value["final"][0]["response"])
+            value["final"][0]["response"][field] = change
+            with self.subTest(field=field, change=change):
+                with self.assertRaisesRegex(ValueError, "not ready"):
+                    verify_protocol_candidate(value, **args)
+                self.assertEqual(
+                    verify_protocol_candidate(value, **args, observe_unready=True)["result"], "FAIL"
+                )
 
     def test_collector_normalization_rejects_missing_attempts_and_unbound_jobs(self):
         normalized = inventory()

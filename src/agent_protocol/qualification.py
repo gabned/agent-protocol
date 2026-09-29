@@ -419,9 +419,26 @@ def verify_protocol_candidate(
         and collection["preflight"]["default_branch"]["response"]["commit"]["sha"] == base,
         "Accepted base/default changed",
     )
-    ready = pr["state"] == "open" and not pr["draft"] and pr["mergeable"] is True
+    final_pr = collection["final"][0]["response"]
+    for snapshot in (pr, final_pr):
+        require(
+            snapshot["number"] == collection["pr"]
+            and snapshot["base"]["ref"] == repository["default_branch"]
+            and snapshot["base"]["sha"] == base
+            and (snapshot["base"]["repo"]["id"], snapshot["base"]["repo"]["full_name"])
+            == (profile["repository_id"], profile["repository"])
+            and snapshot["head"]["sha"] == collection["head"]
+            and snapshot["head"]["ref"] == pr["head"]["ref"]
+            and (snapshot["head"]["repo"]["id"], snapshot["head"]["repo"]["full_name"])
+            == (pr["head"]["repo"]["id"], pr["head"]["repo"]["full_name"]),
+            "PR endpoint identity changed during collection",
+        )
+    ready = all(
+        snapshot["state"] == "open" and snapshot["draft"] is False and snapshot["mergeable"] is True
+        for snapshot in (pr, final_pr)
+    )
     require(
-        pr["state"] == "open" and (ready or observe_unready),
+        pr["state"] == final_pr["state"] == "open" and (ready or observe_unready),
         "Candidate not ready for normal integration",
     )
     now = now or datetime.now(UTC)
