@@ -751,11 +751,17 @@ class NativeGitHubHost:
             self.api.request("/branches/" + quote(repository["default_branch"], safe=""))
         )
         final_pr = self.api.request(f"/pulls/{identity['pr']}")
+
+        def endpoint(value):
+            # Embedded repository objects contain unrelated counters/timestamps.
+            # Recovery binds only stable endpoint identity and expected heads.
+            return (value["ref"], value["sha"], value["repo"]["id"], value["repo"]["full_name"])
+
         require(
             (repository["full_name"], repository["id"])
             == (identity["repository"], identity["repository_id"])
-            and pr["head"] == final_pr["head"]
-            and pr["base"] == final_pr["base"]
+            and endpoint(pr["head"]) == endpoint(final_pr["head"])
+            and endpoint(pr["base"]) == endpoint(final_pr["base"])
             and pr["number"] == final_pr["number"] == identity["pr"]
             and pr["state"] == final_pr["state"]
             and pr.get("merged") == final_pr.get("merged"),

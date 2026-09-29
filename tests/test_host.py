@@ -352,6 +352,35 @@ class SignedJournalTests(unittest.TestCase):
         self.assertEqual(plan["event"]["payload"]["intent_head"], "a" * 40)
         self.assertEqual(plan["event"]["expected_head"], "f" * 40)
         self.assertEqual(plan["event"]["payload"]["coordinates"]["MASTER"], "7" * 40)
+        recovery_reads = []
+
+        def recovery_with_unrelated_activity(suffix):
+            result = copy.deepcopy(api(suffix))
+            if suffix == "/pulls/4":
+                recovery_reads.append(suffix)
+                for side in ("head", "base"):
+                    result[side]["repo"]["open_issues_count"] = len(recovery_reads)
+                    result[side]["repo"]["updated_at"] = str(len(recovery_reads))
+            return result
+
+        native.api.request = recovery_with_unrelated_activity
+        self.assertEqual(host.explain(request)["event"]["expected_head"], "f" * 40)
+        self.assertEqual(len(recovery_reads), 2)
+        for side, field in (("head", "ref"), ("base", "sha"), ("base", "id")):
+            recovery_reads.clear()
+
+            def changed_endpoint(suffix, side=side, field=field):
+                result = recovery_with_unrelated_activity(suffix)
+                if suffix == "/pulls/4" and len(recovery_reads) == 2:
+                    if field == "id":
+                        result[side]["repo"][field] += 1
+                    else:
+                        result[side][field] = "unexpected" if field == "ref" else "e" * 40
+                return result
+
+            native.api.request = changed_endpoint
+            with self.assertRaisesRegex(ValueError, "Recovery identity/default changed"):
+                host.explain(request)
         native.api.request = api
         self.assertTrue(
             all(
