@@ -338,6 +338,16 @@ class QualificationTests(unittest.TestCase):
         reviews.append(
             {"id": 3, "user": {"login": "reviewer"}, "state": "APPROVED", "commit_id": "a" * 40}
         )
+        # Another account's complete REST list does not reveal this reviewer's drafts.
+        self.assertEqual(verify_reviews(collection, **args)["result"], "FAIL")
+        collection["reviewViewer"] = {
+            "url": "https://api.github.com/user",
+            "status": "OBSERVED",
+            "observed_at": "2026-01-01T00:00:00Z",
+            "response": {"id": 19, "login": "operator"},
+        }
+        self.assertEqual(verify_reviews(collection, **args)["result"], "FAIL")
+        collection["reviewViewer"]["response"]["login"] = "reviewer"
         self.assertEqual(verify_reviews(collection, **args)["result"], "PASS")
         reviews.append(
             {"id": 4, "user": {"login": "reviewer"}, "state": "PENDING", "commit_id": "a" * 40}

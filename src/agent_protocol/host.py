@@ -505,79 +505,34 @@ class GitHubCLI:
             "Authenticated account changed from enrollment",
         )
 
-    def atomic_merge(
-        self,
-        *,
-        repository_node_id,
-        base_ref,
-        head_ref,
-        expected_base,
-        expected_head,
-        merge_sha,
-        intent_id,
-    ):
+    def merge_pull_request(self, *, number, expected_head):
+        """Normal provider merge; expected head and server policy remain enforced."""
+        require(type(number) is int and number > 0, "Exact PR number required")
+        sha(expected_head)
         self.assert_account()
-        require(
-            base_ref != head_ref
-            and all(
-                isinstance(ref, str) and ref.startswith("refs/heads/")
-                for ref in (base_ref, head_ref)
-            ),
-            "Exact distinct branch refs required",
-        )
-        require(
-            all(sha(value) != "0" * 40 for value in (expected_base, expected_head, merge_sha)),
-            "Ref creation/deletion is not an integration capability",
-        )
-        require(merge_sha not in {expected_base, expected_head}, "Normal merge commit required")
-        mutation = "mutation($input:UpdateRefsInput!){updateRefs(input:$input){clientMutationId}}"
-        payload = {
-            "query": mutation,
-            "variables": {
-                "input": {
-                    "repositoryId": repository_node_id,
-                    "clientMutationId": intent_id,
-                    "refUpdates": [
-                        {
-                            "name": base_ref,
-                            "beforeOid": expected_base,
-                            "afterOid": merge_sha,
-                            "force": False,
-                        },
-                        {
-                            "name": head_ref,
-                            "beforeOid": expected_head,
-                            "afterOid": expected_head,
-                            "force": False,
-                        },
-                    ],
-                }
-            },
-        }
         result = self.execute(
-            ["gh", "api", "--hostname", "github.com", "graphql", "--input", "-"],
-            input=json.dumps(payload),
+            [
+                "gh",
+                "api",
+                "--hostname",
+                "github.com",
+                "--method",
+                "PUT",
+                f"repos/{self.repository}/pulls/{number}/merge",
+                "--input",
+                "-",
+            ],
+            input=json.dumps({"sha": expected_head, "merge_method": "merge"}),
             capture_output=True,
             text=True,
             cwd=self.directory,
             timeout=120,
             env=self.environment,
         )
-        require(
-            result.returncode == 0,
-            "Atomic integration response unavailable; reconcile existing intent",
-        )
+        require(result.returncode == 0, "Merge not confirmed; reconcile existing intent")
         response = json.loads(result.stdout)
-        require(
-            not response.get("errors")
-            and response.get("data", {}).get("updateRefs", {}).get("clientMutationId") == intent_id,
-            "Atomic integration not confirmed; reconcile existing intent",
-        )
-        return {
-            "state": "REFS_UPDATED_RECONCILIATION_REQUIRED",
-            "merge_sha": merge_sha,
-            "intent": intent_id,
-        }
+        require(response.get("merged") is True, "Merge not confirmed; reconcile existing intent")
+        return {"state": "MERGED_RECONCILIATION_REQUIRED", "merge_sha": sha(response["sha"])}
 
 
 class NativeGitHubHost:
@@ -971,32 +926,18 @@ class NativeGitHubHost:
             and pr["head"]["repo"]["id"] == pr["base"]["repo"]["id"] == identity["repository_id"],
             "Merge coordinates changed before write",
         )
-        base_name = quote(repository["default_branch"], safe="")
-        branch = self.api.request("/branches/" + base_name)
-        # Indirect merge must never be an escape from PR protections/rulesets.
-        # Unknown/inaccessible rule inventory also refuses this transport.
-        require(
-            branch["protected"] is False and self.api.request("/rules/branches/" + base_name) == [],
-            "Protected integration requires an accepted atomic native adapter",
-        )
+        branch = self.api.request("/branches/" + quote(repository["default_branch"], safe=""))
         require(branch["commit"]["sha"] == expected_base, "Base advanced before integration")
-        merged = self.api.request("/git/commits/" + sha(pr["merge_commit_sha"]))
-        candidate = self.api.request("/git/commits/" + sha(expected_head))
+        # Repeat all mutable qualification after the durable intent, at the effect
+        # boundary. Direct ref updates are never a substitute for a PR merge.
+        observed = self.observe(identity)
         require(
-            [p["sha"] for p in merged["parents"]] == [expected_base, expected_head]
-            and merged["tree"]["sha"] == candidate["tree"]["sha"],
-            "GitHub merge preview differs from qualified parents/tree",
+            observed["coordinates"] == state["coordinates"],
+            "Qualification coordinates changed at merge boundary",
         )
-        # REST merge's `sha` guards only the PR head. GitHub updateRefs guards
-        # both refs atomically, without force, using the existing two-parent
-        # merge object. The head no-op is an expected-value guard, not a rewrite.
-        # Only subsequent actual PR/commit/post-CI observation establishes merge.
-        return self.api.atomic_merge(
-            repository_node_id=repository["node_id"],
-            base_ref="refs/heads/" + repository["default_branch"],
-            head_ref="refs/heads/" + identity["branch"],
-            expected_base=expected_base,
-            expected_head=expected_head,
-            merge_sha=merged["sha"],
-            intent_id=state["tip"],
+        require(
+            all(gate["result"] == "PASS" for gate in observed["gates"]),
+            "Qualification no longer complete at merge boundary",
         )
+        self.check_effects(self.profile)
+        return self.api.merge_pull_request(number=identity["pr"], expected_head=expected_head)

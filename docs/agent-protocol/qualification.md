@@ -21,6 +21,14 @@ is not complete, and a resolved thread does not erase its original finding.
 An applicable reviewer's pending review blocks completion even if an older exact-head
 approval exists. Recollection timestamps remain observation metadata; stable close
 plans retain the complete CI identity/results without treating time alone as a change.
+GitHub draft reviews are visible only to their author. The authenticated collector
+records its own account through a separate read-only viewer callback. A paginated
+review list cannot establish another mandatory reviewer's session completeness;
+that requirement remains REVIEWER_SESSION_UNOBSERVABLE and fails qualification.
+Multiple mandatory human reviewers therefore require an independently accepted
+host/provider that can observe their sessions. Do not remove reviewers or substitute
+an older approval to make this native route pass. Public bot activity requirements
+retain their independently authenticated provider completion checks.
 
 The provider adapter `CODEX_SUMMARY_V1` requires the independently enrolled numeric
 bot identity and separate CODE/SECURITY completion on the exact candidate. It reads

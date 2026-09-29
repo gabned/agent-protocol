@@ -68,6 +68,23 @@ test('complete bounded collection retains raw evidence and never claims qualific
   assert.ok(observations.length>10);
   assert.equal(result.ci.complete,true);
 });
+test('review visibility records only the authenticated collector account',async()=>{
+  const {options,observations}=harness();
+  options.fetchViewer=async()=>({id:19,login:'synthetic-reviewer',private_field:'discard'});
+  const result=await collectLifecycle(options);
+  assert.deepEqual(result.reviewViewer.response,{id:19,login:'synthetic-reviewer'});
+  assert.equal(result.reviewViewer.url,'https://api.github.com/user');
+  assert.ok(observations.includes(result.reviewViewer));
+  options.fetchViewer=async()=>({login:'unproved'});
+  await assert.rejects(()=>collectLifecycle(options),/viewer unavailable/);
+});
+test('native viewer uses the same bound read transport without a user-selected route',async()=>{
+  const calls=[];
+  const reader=await createGitHubCliReader({repository,repositoryId:17,
+    invoke:async args=>{calls.push(args);return {id:19,login:'synthetic-reviewer'};}});
+  assert.deepEqual(await reader.fetchViewer(),{id:19,login:'synthetic-reviewer'});
+  assert.deepEqual(calls,[['--method','GET','user']]);
+});
 test('provider short review identities are resolved by the authenticated repository API',async()=>{
   const {options,responses}=harness();
   responses['/pulls/4'].comments=1;

@@ -8,7 +8,7 @@ import {createEvidenceCollector, collectPreflight, connectorPayload, createWorkC
 export {connectorPayload, createWorkConnector};
 
 export async function collectLifecycle({repository, repositoryId, pr, fetchJson,
-  fetchReviewThreads, persistObservation, now = () => new Date().toISOString(),
+  fetchReviewThreads, fetchViewer = null, persistObservation, now = () => new Date().toISOString(),
   maxPages = 20, cacheSnapshot = null, expectedCacheSha256 = null, sha256 = null}) {
   if (!Number.isSafeInteger(repositoryId) || repositoryId <= 0 ||
       !Number.isSafeInteger(pr) || pr <= 0 || typeof persistObservation !== 'function') {
@@ -23,6 +23,17 @@ export async function collectLifecycle({repository, repositoryId, pr, fetchJson,
       active.pr.response.base?.repo?.full_name !== repository) throw Error('Repository/PR identity mismatch');
   if (!active.reviews.complete || active.threads.status !== 'OBSERVED') {
     throw Error('Complete reviews and threads required; absence is not proof');
+  }
+  let reviewViewer = null;
+  if (fetchViewer !== null) {
+    if (typeof fetchViewer !== 'function') throw Error('Authenticated viewer callback required');
+    const response = await fetchViewer();
+    if (!Number.isSafeInteger(response.id) || response.id <= 0 || typeof response.login !== 'string') {
+      throw Error('Authenticated review viewer unavailable');
+    }
+    reviewViewer = {url:'https://api.github.com/user', response:{id:response.id,login:response.login},
+      observed_at:now(),status:'OBSERVED'};
+    await persistObservation(reviewViewer);
   }
   const head = active.pr.response.head?.sha;
   if (!/^[0-9a-f]{40}$/.test(head || '')) throw Error('Exact candidate required');
@@ -93,7 +104,7 @@ export async function collectLifecycle({repository, repositoryId, pr, fetchJson,
     throw Error('PR or default changed during collection; reconcile before retry');
   }
   return {schema:'agent-lifecycle-collection/v2', repository, repository_id:repositoryId,
-    pr, head, preflight, ci, postMerge, files, commits, trees, reviewComments, issueComments, reviewReferences,
+    pr, head, preflight, ci, postMerge, files, commits, trees, reviewComments, issueComments, reviewReferences, reviewViewer,
     base:{commit:baseCommit.observation, tree:baseTree.observation}, retained, final:observations,
     metrics:evidence.metrics(), cache:evidence.snapshot(), result:'COLLECTED_NOT_QUALIFIED'};
 }
@@ -197,7 +208,8 @@ export async function createGitHubCliReader({repository, repositoryId, invoke = 
     }
     throw Error('Thread pagination limit; no partial success');
   }
-  return {fetchJson,fetchReviewThreads};
+  const fetchViewer = () => invoke(['--method','GET','user']);
+  return {fetchJson,fetchReviewThreads,fetchViewer};
 }
 
 // CLI and Work adapters call the same collector; neither dispatches lifecycle writes.

@@ -192,10 +192,33 @@ def verify_reviews(collection, *, required_reviewers, now=None):
         r["state"] == "PENDING" and r["user"]["login"] in required_reviewers
         for r in active["reviews"]["items"]
     )
+    # GitHub only exposes draft reviews to their author. A complete paginated
+    # list from another account is not proof that a required reviewer is idle.
+    viewer = collection.get("reviewViewer")
+    visible = not required_reviewers
+    if required_reviewers and viewer:
+        instant = datetime.fromisoformat(viewer["observed_at"].replace("Z", "+00:00"))
+        visible = (
+            viewer.get("status") == "OBSERVED"
+            and viewer.get("url") == "https://api.github.com/user"
+            and type(viewer["response"].get("id")) is int
+            and viewer["response"]["id"] > 0
+            and 0 <= (now - instant).total_seconds() <= 900
+            and set(required_reviewers) == {viewer["response"].get("login")}
+        )
     return {
-        "result": "PASS" if approved and not blocked and not pending and not unresolved else "FAIL",
+        "result": "PASS"
+        if visible and approved and not blocked and not pending and not unresolved
+        else "FAIL",
         "unresolved": unresolved,
-        "digest": digest({"reviews": active["reviews"]["items"], "threads": threads}),
+        "visibility": "OBSERVED" if visible else "REVIEWER_SESSION_UNOBSERVABLE",
+        "digest": digest(
+            {
+                "reviews": active["reviews"]["items"],
+                "threads": threads,
+                "viewer": viewer.get("response") if viewer else None,
+            }
+        ),
     }
 
 

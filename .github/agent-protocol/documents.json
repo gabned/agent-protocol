@@ -71,7 +71,7 @@
     },
     {
       "path": "docs/agent-protocol/qualification.md",
-      "sha256": "007239befe64b9844874b1d53a98ddce7119581696c151140d10144153f2d6cc",
+      "sha256": "fa53c505a995f0a1a2d612b701d103aef9dd621454c351640b5f948f4115ed59",
       "phases": [
         "QUALIFY",
         "INTEGRATE"
@@ -89,7 +89,7 @@
     },
     {
       "path": "docs/agent-protocol/hosts.md",
-      "sha256": "92a4ce473bd6a010ce0157897170e1502e1a758da20e83f4746abfa37c32e4c1",
+      "sha256": "22247008f59e07b9db377dc98dc6032609d2a3604b63a63ffa5c0f02b991badf",
       "phases": [
         "START",
         "RECOVER",

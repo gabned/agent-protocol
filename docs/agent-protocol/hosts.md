@@ -47,6 +47,10 @@ performs bounded read-only collection. It checks repository IDs, all review and
 nested thread-comment pages, run attempts/jobs and retained candidate trees. Work
 uses `collectLifecycle` with authenticated connector functions and the same
 `qualify-pr` engine. Collected JSON is evidence input, never write authorization.
+The optional `fetchViewer` callback reads the authenticated account through the
+same credential context as the review list; it is a host capability, never a
+candidate-supplied account claim. Missing viewer evidence cannot establish a
+mandatory human reviewer's private draft state. Native `gh` binds that context.
 
 `agent-protocol start --enrollment /operator/enrollment.json` reads one typed
 request from standard input. The other write commands are `refresh`, `interrupt`,
@@ -94,20 +98,22 @@ accepted local policy and use the shared `ProtocolHost` evaluator/executor bound
 
 The adapter integrates only its enrolled PR and publishes its signed journal.
 Journal pushes use the same bound GitHub credential over HTTPS, with no URL secrets.
-For integration it verifies GitHub's existing two-parent merge preview against the
-qualified base, head and tree, then uses GitHub's atomic `updateRefs` with both
-expected refs and `force: false`. The candidate ref is a no-op expected-head guard;
-the default ref advances to that exact normal merge commit. A concurrent update of
-either ref rejects the transaction. A REST merge's head-only `sha` precondition
-cannot provide this base guarantee and is not substituted. See the supported
-[atomic Git ref contract](https://docs.github.com/en/graphql/reference/git#updaterefs).
+Integration uses GitHub's normal pull-request merge endpoint with the exact
+expected candidate SHA and merge method. It never updates the default ref directly,
+requires protections to be absent, bypasses server policy or modifies repository
+protections. After the durable intent, it recollects the full qualification and
+compares all coordinates again immediately before dispatch. Provider rejection
+does not authorize a different effect mechanism.
 
-This native route refuses protected base branches, any active base rules, or an
-unavailable rules inventory. It cannot be used as a bypass for PR rules or queues;
-those repositories require an independently accepted atomic native adapter. All
-Protocol CI and review gates remain mandatory even on unprotected branches.
-An atomic-write response is not a delivery receipt: observe the actual PR's indirect
-merge recognition, exact parents/tree and post-merge CI before reconciliation.
+The API atomically guards the candidate head and enforces configured server gates.
+It does not expose a transaction over the qualified base and every external review
+observation. Freshness is the accepted observation-boundary contract, not a claim
+that independently mutable external evidence is locked. An independently accepted
+policy requiring stronger atomic guarantees needs a supported server mechanism;
+this adapter cannot certify that stronger guarantee. Reconciliation checks actual
+parents/tree/default and post-merge CI; a mismatch cannot be turned into PASS.
+See the [normal merge API](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request).
+
 Merge intent is durable first; a retry of that intent never sends another merge.
 Live production conditions are checked again immediately before dispatch. Reopening
 a host after integration can read the accepted profile from verified default-branch
