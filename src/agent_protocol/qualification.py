@@ -166,6 +166,11 @@ def verify_reviews(collection, *, required_reviewers, now=None, review_head=None
     )
     comments = collection["reviewComments"]
     require(len(comments) == pr["review_comments"], "Review comment inventory mismatch")
+    if "final" in collection:
+        require(
+            collection["final"][0]["response"]["review_comments"] == len(comments),
+            "Review comment inventory changed during collection",
+        )
     ids = [c.get("database_id", c.get("id")) for t in threads for c in t["comments"]]
     require(
         len(ids) == len(set(ids)) == len(comments) and set(ids) == {c["id"] for c in comments},
@@ -268,6 +273,11 @@ def verify_review_activity(collection, requirements, *, now=None, review_head=No
         len(comments) == pr["comments"] and len({c["id"] for c in comments}) == len(comments),
         "Incomplete review activity comments",
     )
+    if "final" in collection:
+        require(
+            collection["final"][0]["response"]["comments"] == len(comments),
+            "Review activity inventory changed during collection",
+        )
     for rule in requirements:
         exact(rule, "provider author_id kind", "accepted review activity")
         require(

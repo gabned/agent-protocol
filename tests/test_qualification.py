@@ -236,6 +236,11 @@ class QualificationTests(unittest.TestCase):
         result = verify_protocol_candidate(collection, **args)
         self.assertEqual(result["result"], "PASS")
         self.assertFalse(result["write_authorized"])
+        changed_reviews = copy.deepcopy(collection)
+        changed_reviews["final"][0]["response"] = copy.deepcopy(collection["final"][0]["response"])
+        changed_reviews["final"][0]["response"]["review_comments"] += 1
+        with self.assertRaisesRegex(ValueError, "inventory changed"):
+            verify_protocol_candidate(changed_reviews, **args)
         for attack in ("mode", "scope", "parent", "repository", "stale-ci", "endpoint", "marker"):
             value = copy.deepcopy(collection)
             if attack == "mode":

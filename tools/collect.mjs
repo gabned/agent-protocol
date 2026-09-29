@@ -109,6 +109,8 @@ export async function collectLifecycle({repository, repositoryId, pr, fetchJson,
   if (finalPr.number !== pr || !sameEndpoint('head') || !sameEndpoint('base') ||
       finalPr.base?.ref !== identity.default_branch ||
       finalPr.draft !== initialPr.draft || finalPr.mergeable !== initialPr.mergeable ||
+      finalPr.review_comments !== initialPr.review_comments ||
+      (!settling && ['comments','changed_files','commits'].some(k => finalPr[k] !== initialPr[k])) ||
       observations[0].response.head?.sha !== head || observations[1].response.commit?.sha !== before ||
       observations[0].response.state !== active.pr.response.state ||
       observations[0].response.merged !== active.pr.response.merged ||

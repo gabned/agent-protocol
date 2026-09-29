@@ -117,12 +117,12 @@ test('provider short review identities are resolved by the authenticated reposit
   assert.equal(result.reviewReferences[0].response.sha,head);
 });
 test('identity, review completeness, pagination and changed head fail closed',async()=>{
-  for(const attack of ['identity','threads','pagination','head','base-ref','base-repo','head-ref','head-repo','number','draft','mergeable']) {
+  for(const attack of ['identity','threads','pagination','head','base-ref','base-repo','head-ref','head-repo','number','draft','mergeable','late-review','late-activity']) {
     const {options,responses}=harness();
     if(attack==='identity') options.repositoryId=18;
     if(attack==='threads') options.fetchReviewThreads=async()=>({threads:[]});
     if(attack==='pagination') responses['/pulls/4'].changed_files=2;
-    if(['head','base-ref','base-repo','head-ref','head-repo','number','draft','mergeable'].includes(attack)) {
+    if(['head','base-ref','base-repo','head-ref','head-repo','number','draft','mergeable','late-review','late-activity'].includes(attack)) {
       const original=options.fetchJson; let calls=0;
       options.fetchJson=async url=>{
         const value=await original(url);
@@ -135,6 +135,8 @@ test('identity, review completeness, pagination and changed head fail closed',as
           if(attack==='number') value.number=5;
           if(attack==='draft') value.draft=true;
           if(attack==='mergeable') value.mergeable=false;
+          if(attack==='late-review') value.review_comments++;
+          if(attack==='late-activity') value.comments++;
         }
         return value;
       };
