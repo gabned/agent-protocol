@@ -50,6 +50,11 @@ export async function collectLifecycle({repository, repositoryId, pr, fetchJson,
   }
   const files = await pages(`/pulls/${pr}/files`, active.pr.response.changed_files);
   const commits = await pages(`/pulls/${pr}/commits`, active.pr.response.commits);
+  const reviewComments = await pages(`/pulls/${pr}/comments`, active.pr.response.review_comments);
+  const issueComments = await pages(`/issues/${pr}/comments`, active.pr.response.comments);
+  const baseCommit = await evidence.readImmutable('commits', active.pr.response.base.sha);
+  const baseTree = await evidence.readTree(baseCommit.observation.response.tree.sha, true);
+  if (baseTree.observation.response.truncated !== false) throw Error('Incomplete accepted base tree');
   const trees = [];
   for (const commit of commits) {
     const object = await evidence.readImmutable('commits', commit.sha);
@@ -70,7 +75,8 @@ export async function collectLifecycle({repository, repositoryId, pr, fetchJson,
     throw Error('PR or default changed during collection; reconcile before retry');
   }
   return {schema:'agent-lifecycle-collection/v2', repository, repository_id:repositoryId,
-    pr, head, preflight, ci, files, commits, trees, retained, final:observations,
+    pr, head, preflight, ci, files, commits, trees, reviewComments, issueComments,
+    base:{commit:baseCommit.observation, tree:baseTree.observation}, retained, final:observations,
     metrics:evidence.metrics(), cache:evidence.snapshot(), result:'COLLECTED_NOT_QUALIFIED'};
 }
 
@@ -79,4 +85,11 @@ export async function explainWithEngine({request, invokeAcceptedEngine}) {
   // The host binds this function to its verified package. Candidate data never
   // chooses a command, module, executable, policy source or credential provider.
   return invokeAcceptedEngine('explain', request);
+}
+
+export async function qualifyWithEngine({collection, acceptedProfile, acceptedProfileDigest,
+  invokeAcceptedEngine}) {
+  if (typeof invokeAcceptedEngine !== 'function') throw Error('Accepted host engine capability required');
+  return invokeAcceptedEngine('qualify-pr', {collection, accepted_profile:acceptedProfile,
+    expected_profile_digest:acceptedProfileDigest});
 }

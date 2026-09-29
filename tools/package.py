@@ -28,7 +28,14 @@ NAME = "agent_protocol_core-1.5.0-py3-none-any.whl"
 def committed_files(root, revision):
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("Exact immutable packaging revision required")
-    git = ["git", "--no-replace-objects", "-C", str(root)]
+    git = [
+        "git",
+        "--no-replace-objects",
+        "-c",
+        "safe.directory=" + Path(root).resolve().as_posix(),
+        "-C",
+        str(root),
+    ]
     files = {}
     for record in subprocess.check_output([*git, "ls-tree", "-rz", revision]).split(b"\0"):
         if not record:
@@ -52,6 +59,60 @@ def committed_files(root, revision):
     ):
         raise ValueError("Packaging requires the complete registered file/mode inventory")
     return files
+
+
+def source_manifest(files, revision):
+    return {
+        "schema": "agent-protocol-source/v1",
+        "repository": "gabned/agent-protocol",
+        "repository_id": 1393711644,
+        "revision": revision,
+        "version": "1.5.0",
+        "files": [
+            {"path": p, "mode": m, "blob": b, "sha256": hashlib.sha256(d).hexdigest()}
+            for p, (m, d, b) in sorted(files.items())
+        ],
+    }
+
+
+def restored_files(root):
+    """Rebuild an unpacked source artifact without Git or a product checkout.
+
+    The installer/publisher authenticates the external artifact digest separately.
+    This checks internal byte integrity only and cannot grant source authority.
+    """
+    root = Path(root).resolve()
+    manifest = json.loads((root / "SOURCE-MANIFEST.json").read_text(encoding="utf-8"))
+    if manifest.get("schema") != "agent-protocol-source/v1" or manifest.get("version") != "1.5.0":
+        raise ValueError("Unknown source artifact")
+    files = {}
+    for row in manifest["files"]:
+        name = row["path"]
+        if (
+            name.startswith("/")
+            or "\\" in name
+            or ":" in name
+            or any(p in {"", ".", ".."} for p in name.split("/"))
+        ):
+            raise ValueError("Unsafe restored source path")
+        path = root / name
+        if name in files or any(p.is_symlink() for p in (path, *path.parents)):
+            raise ValueError("Duplicate or symlink restored source")
+        data = path.read_bytes()
+        blob = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+        if (
+            row["mode"] not in {"100644", "100755"}
+            or blob != row["blob"]
+            or hashlib.sha256(data).hexdigest() != row["sha256"]
+        ):
+            raise ValueError("Restored source bytes/mode differ")
+        files[name] = (row["mode"], data, blob)
+    registry = json.loads(files[".github/agent-protocol/bootstrap.json"][1])
+    if set(files) != set(registry["paths"]) or any(
+        files[p][0] != registry["modes"][p] for p in files
+    ):
+        raise ValueError("Restored inventory differs from packaged registry")
+    return files, manifest["revision"]
 
 
 def wheel_bytes(files):
@@ -94,7 +155,10 @@ def wheel_bytes(files):
     return output.getvalue()
 
 
-def source_bytes(files):
+def source_bytes(files, revision=None):
+    if revision is not None:
+        metadata = (json.dumps(source_manifest(files, revision), indent=2) + "\n").encode()
+        files = {**files, "SOURCE-MANIFEST.json": ("100644", metadata, None)}
     output = io.BytesIO()
     with (
         gzip.GzipFile(filename="", mode="wb", fileobj=output, mtime=0) as compressed,
@@ -108,21 +172,33 @@ def source_bytes(files):
 
 
 def current_revision():
-    return subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"]).decode().strip()
+    return (
+        subprocess.check_output(
+            ["git", "-c", "safe.directory=" + ROOT.as_posix(), "-C", str(ROOT), "rev-parse", "HEAD"]
+        )
+        .decode()
+        .strip()
+    )
+
+
+def build_inputs():
+    if (ROOT / "SOURCE-MANIFEST.json").is_file():
+        return restored_files(ROOT)
+    revision = current_revision()
+    return committed_files(ROOT, revision), revision
 
 
 def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
-    revision = current_revision()
+    files, _revision = build_inputs()
     target = Path(wheel_directory) / NAME
-    target.write_bytes(wheel_bytes(committed_files(ROOT, revision)))
+    target.write_bytes(wheel_bytes(files))
     return NAME
 
 
 def build_sdist(sdist_directory, config_settings=None):
     name = "agent_protocol_core-1.5.0.tar.gz"
-    (Path(sdist_directory) / name).write_bytes(
-        source_bytes(committed_files(ROOT, current_revision()))
-    )
+    files, revision = build_inputs()
+    (Path(sdist_directory) / name).write_bytes(source_bytes(files, revision))
     return name
 
 
@@ -145,7 +221,7 @@ def main(argv=None):
         ],
     }
     artifacts = {
-        "source.tar.gz": source_bytes(files),
+        "source.tar.gz": source_bytes(files, args.revision),
         NAME: wheel_bytes(files),
         "source-manifest.json": (json.dumps(manifest, indent=2) + "\n").encode(),
     }

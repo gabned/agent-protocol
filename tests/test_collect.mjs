@@ -9,7 +9,8 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const repository = 'example/synthetic', head = 'a'.repeat(40), base = 'b'.repeat(40);
 function harness() {
   const repo = {full_name:repository, id:17, default_branch:'main'};
-  const pr = {number:4, state:'open', head:{sha:head}, base:{sha:base,repo}, commits:1, changed_files:1};
+  const pr = {number:4, state:'open', head:{sha:head}, base:{sha:base,repo}, commits:1,
+    changed_files:1,comments:0,review_comments:0};
   const observations = [];
   const responses = {
     '':repo, '/branches/main':{commit:{sha:base}}, '/pulls?state=open&per_page=100&page=1':[pr],
@@ -18,6 +19,9 @@ function harness() {
     [`/actions/runs?head_sha=${head}&per_page=100&page=1`]:{total_count:0,workflow_runs:[]},
     '/pulls/4/files?per_page=100&page=1':[{filename:'synthetic.py',status:'added'}],
     '/pulls/4/commits?per_page=100&page=1':[{sha:head}],
+    '/pulls/4/comments?per_page=100&page=1':[], '/issues/4/comments?per_page=100&page=1':[],
+    [`/git/commits/${base}`]:{sha:base,tree:{sha:'d'.repeat(40)},parents:[]},
+    [`/git/trees/${'d'.repeat(40)}?recursive=1`]:{sha:'d'.repeat(40),truncated:false,tree:[]},
     [`/git/commits/${head}`]:{sha:head,tree:{sha:'c'.repeat(40)},parents:[{sha:base}]},
     [`/git/trees/${'c'.repeat(40)}?recursive=1`]:{sha:'c'.repeat(40),truncated:false,tree:[]},
   };

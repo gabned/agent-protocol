@@ -10,7 +10,7 @@ from .audit import reconcile
 from .documents import select
 from .ledger import exact
 from .lifecycle import evaluate, freshness
-from .qualification import ci_evidence
+from .qualification import ci_evidence, verify_protocol_candidate
 
 
 def dispatch(command, value):
@@ -23,6 +23,11 @@ def dispatch(command, value):
     if command == "qualify-ci":
         exact(value, "inventory repository head accepted_policy", "CI input")
         return ci_evidence(**value)
+    if command == "qualify-pr":
+        exact(
+            value, "collection accepted_profile expected_profile_digest", "PR qualification input"
+        )
+        return verify_protocol_candidate(**value)
     if command == "documents":
         exact(value, "root manifest accepted_digest phase host workstream", "document input")
         return select(**value)
@@ -35,7 +40,8 @@ def dispatch(command, value):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "command", choices=["explain", "freshness", "qualify-ci", "documents", "audit"]
+        "command",
+        choices=["explain", "freshness", "qualify-ci", "qualify-pr", "documents", "audit"],
     )
     args = parser.parse_args(argv)
     try:

@@ -9,7 +9,14 @@ from datetime import UTC, datetime
 
 from test_lifecycle import fixture
 
-from agent_protocol.qualification import ci_evidence, policy_decision
+from agent_protocol.ledger import digest
+from agent_protocol.qualification import (
+    ci_evidence,
+    normalize_ci,
+    policy_decision,
+    verify_protocol_candidate,
+    verify_reviews,
+)
 from agent_protocol.source import legacy
 
 
@@ -52,6 +59,233 @@ def inventory():
 
 
 class QualificationTests(unittest.TestCase):
+    def test_protocol_raw_objects_bind_scope_history_identity_ci_and_reviews(self):
+        stamp = "2026-01-01T00:00:00Z"
+        repo = {"full_name": "example/synthetic", "id": 17}
+        head, base, base_tree, head_tree = (c * 40 for c in "abcd")
+        pr = {
+            "number": 4,
+            "head": {"sha": head},
+            "base": {"sha": base, "repo": repo},
+            "state": "open",
+            "draft": False,
+            "mergeable": True,
+            "commits": 1,
+            "changed_files": 1,
+            "review_comments": 0,
+        }
+
+        def observed(value):
+            return {"response": value, "observed_at": stamp}
+
+        def tree_record(commit, parents, tree, entries):
+            return {
+                "commit": observed(
+                    {"sha": commit, "parents": [{"sha": p} for p in parents], "tree": {"sha": tree}}
+                ),
+                "tree": observed({"sha": tree, "truncated": False, "tree": entries}),
+            }
+
+        run = {
+            "id": 1,
+            "repository": repo,
+            "head_sha": head,
+            "run_attempt": 1,
+            "status": "completed",
+            "conclusion": "success",
+            "path": ".github/workflows/ci.yml",
+            "event": "pull_request",
+        }
+        job = {
+            "id": 1,
+            "name": "native",
+            "head_sha": head,
+            "run_id": 1,
+            "status": "completed",
+            "conclusion": "success",
+        }
+        collection = {
+            "schema": "agent-lifecycle-collection/v2",
+            "repository": repo["full_name"],
+            "repository_id": 17,
+            "pr": 4,
+            "head": head,
+            "preflight": {
+                "repo": observed(repo),
+                "default_branch": observed({"commit": {"sha": base}}),
+                "active_pull_request": {
+                    "pr": observed(pr),
+                    "reviews": {"complete": True, "items": []},
+                    "threads": {
+                        "observed_at": stamp,
+                        "status": "OBSERVED",
+                        "response": {"complete": True, "threads": []},
+                    },
+                },
+            },
+            "reviewComments": [],
+            "files": [{"filename": "protocol.py"}],
+            "commits": [{"sha": head}],
+            "base": tree_record(base, [], base_tree, []),
+            "trees": [
+                tree_record(
+                    head,
+                    [base],
+                    head_tree,
+                    [{"path": "protocol.py", "type": "blob", "mode": "100644", "sha": "e" * 40}],
+                )
+            ],
+            "final": [observed(pr), observed({"commit": {"sha": base}})],
+            "ci": {
+                "schema": "agent-work-ci-history/v1",
+                "complete": True,
+                "repository": repo["full_name"],
+                "head_sha": head,
+                "inventory": [observed({"total_count": 1, "workflow_runs": [run]})],
+                "histories": [
+                    {
+                        "attempt": observed(run),
+                        "jobs": [observed({"total_count": 1, "jobs": [job]})],
+                    }
+                ],
+            },
+        }
+        profile = {
+            "repository": repo["full_name"],
+            "repository_id": 17,
+            "source_commit": base,
+            "workstream_class": "PROTOCOL",
+            "effects": "NO_PRODUCTION",
+            "paths": {"protocol.py": "100644"},
+            "frozen_paths": [],
+            "reviewers": [],
+            "ci": {
+                "source_commit": base,
+                "required_workflows": [".github/workflows/ci.yml@pull_request"],
+            },
+        }
+        args = {
+            "accepted_profile": profile,
+            "expected_profile_digest": digest(profile),
+            "now": datetime(2026, 1, 1, tzinfo=UTC),
+        }
+        result = verify_protocol_candidate(collection, **args)
+        self.assertEqual(result["result"], "PASS")
+        self.assertFalse(result["write_authorized"])
+        for attack in ("mode", "scope", "parent", "repository", "stale-ci", "endpoint"):
+            value = copy.deepcopy(collection)
+            if attack == "mode":
+                value["trees"][0]["tree"]["response"]["tree"][0]["mode"] = "120000"
+            elif attack == "scope":
+                value["trees"][0]["tree"]["response"]["tree"][0]["path"] = "unapproved.py"
+            elif attack == "parent":
+                value["trees"][0]["commit"]["response"]["parents"] = []
+            elif attack == "repository":
+                value["preflight"]["repo"]["response"]["id"] = 99
+            elif attack == "stale-ci":
+                value["ci"]["inventory"][0]["observed_at"] = "2025-12-31T00:00:00Z"
+            else:
+                value["files"][0]["filename"] = "different.py"
+            with self.subTest(attack=attack), self.assertRaises(ValueError):
+                verify_protocol_candidate(value, **args)
+
+    def test_collector_normalization_rejects_missing_attempts_and_unbound_jobs(self):
+        normalized = inventory()
+        run = {
+            "id": 1,
+            "repository": {"full_name": "example/synthetic"},
+            "head_sha": "a" * 40,
+            "run_attempt": 1,
+            "status": "completed",
+            "conclusion": "success",
+            "path": ".github/workflows/ci.yml",
+            "event": "pull_request",
+        }
+        job = {
+            "id": 1,
+            "name": "native",
+            "head_sha": "a" * 40,
+            "run_id": 1,
+            "run_attempt": 1,
+            "status": "completed",
+            "conclusion": "success",
+        }
+        history = {
+            "schema": "agent-work-ci-history/v1",
+            "complete": True,
+            "head_sha": "a" * 40,
+            "repository": "example/synthetic",
+            "inventory": [{"response": {"total_count": 1, "workflow_runs": [run]}}],
+            "histories": [
+                {
+                    "attempt": {"response": run},
+                    "jobs": [{"response": {"total_count": 1, "jobs": [job]}}],
+                }
+            ],
+        }
+        args = {
+            "accepted_policy": {
+                "source_commit": "b" * 40,
+                "required_workflows": normalized["required_workflows"],
+            },
+            "observed_at": "2026-01-01T00:00:00Z",
+        }
+        self.assertEqual(normalize_ci(history, **args), normalized)
+        for attack in ("attempt", "job", "total"):
+            value = copy.deepcopy(history)
+            if attack == "attempt":
+                value["histories"] = []
+            elif attack == "job":
+                value["histories"][0]["jobs"][0]["response"]["jobs"][0]["run_id"] = 2
+            else:
+                value["inventory"][0]["response"]["total_count"] = 2
+            with self.subTest(attack=attack), self.assertRaises(ValueError):
+                normalize_ci(value, **args)
+
+    def test_comment_cannot_erase_requested_changes_and_thread_completeness_is_independent(self):
+        reviews = [
+            {
+                "id": 1,
+                "user": {"login": "reviewer"},
+                "state": "CHANGES_REQUESTED",
+                "commit_id": "a" * 40,
+            },
+            {"id": 2, "user": {"login": "reviewer"}, "state": "COMMENTED", "commit_id": "a" * 40},
+        ]
+        collection = {
+            "head": "a" * 40,
+            "reviewComments": [{"id": 5}],
+            "preflight": {
+                "active_pull_request": {
+                    "pr": {"response": {"review_comments": 1}},
+                    "reviews": {"complete": True, "items": reviews},
+                    "threads": {
+                        "status": "OBSERVED",
+                        "observed_at": "2026-01-01T00:00:00Z",
+                        "response": {
+                            "complete": True,
+                            "threads": [
+                                {
+                                    "id": "thread",
+                                    "is_resolved": True,
+                                    "comments": [{"database_id": 5}],
+                                }
+                            ],
+                        },
+                    },
+                }
+            },
+        }
+        args = {"required_reviewers": ["reviewer"], "now": datetime(2026, 1, 1, tzinfo=UTC)}
+        self.assertEqual(verify_reviews(collection, **args)["result"], "FAIL")
+        reviews.append(
+            {"id": 3, "user": {"login": "reviewer"}, "state": "APPROVED", "commit_id": "a" * 40}
+        )
+        self.assertEqual(verify_reviews(collection, **args)["result"], "PASS")
+        collection["preflight"]["active_pull_request"]["threads"]["response"]["threads"] = []
+        with self.assertRaises(ValueError):
+            verify_reviews(collection, **args)
+
     def verify(self, value):
         return ci_evidence(
             value,

@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import io
 import json
@@ -27,7 +28,38 @@ class PackagingTests(unittest.TestCase):
             "compat/legacy/tools/agent_protocol_v1_4_9.py",
             "compat/legacy/tools/agent_protocol_v1_4_2_ops.py",
         ]
-        return {name: ("100644", (ROOT / name).read_bytes(), "a" * 40) for name in names}
+        files = {}
+        for name in names:
+            data = (ROOT / name).read_bytes()
+            blob = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+            files[name] = ("100644", data, blob)
+        return files
+
+    def test_clean_source_restore_rebuilds_identical_wheel_without_git(self):
+        files = self.files()
+        name = ".github/agent-protocol/bootstrap.json"
+        registry = {
+            "paths": sorted([*files, name]),
+            "modes": dict.fromkeys([*files, name], "100644"),
+        }
+        data = json.dumps(registry).encode()
+        files[name] = (
+            "100644",
+            data,
+            hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest(),
+        )
+        archive = packaging.source_bytes(files, "a" * 40)
+        with tempfile.TemporaryDirectory() as temporary:
+            with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as source:
+                source.extractall(temporary, filter="data")
+            restored = Path(temporary) / "agent-protocol-1.5.0"
+            actual, revision = packaging.restored_files(restored)
+            self.assertEqual(revision, "a" * 40)
+            self.assertEqual(packaging.wheel_bytes(actual), packaging.wheel_bytes(files))
+            self.assertFalse((restored / ".git").exists())
+            (restored / "LICENSE").write_bytes(b"altered")
+            with self.assertRaisesRegex(ValueError, "Restored source bytes"):
+                packaging.restored_files(restored)
 
     def test_deterministic_archives_preserve_notices_modes_and_standalone_policy(self):
         files = self.files()
