@@ -5,9 +5,17 @@ transfer manifest, independently observed by the host. The destination repositor
 identity and first root tree must match that manifest, including modes and notices.
 No application Git history is imported. The predecessor remains available for old pins.
 
-The first root commit contains only the exact original LICENSE. The complete
+The first root commit contains only the exact original LICENSE. The first complete
 bootstrap candidate is its direct child, qualified in the predecessor before
-publication. Its observed ancestry may contain no other commit or imported history.
+publication. Corrections preserve that candidate: a transfer-v2 manifest qualified
+in the predecessor enumerates every retained bootstrap commit, parent, tree and
+qualifying predecessor manifest. The corrected candidate must append to that exact
+observed chain; unrelated, omitted or rewritten ancestry is refused. No product
+history is imported. Transfer-v1 receipts keep the original direct-child semantics.
+The authorized host separately supplies the original authenticated qualification
+identities, selected from retained predecessor reconciliation and original byte/tree
+receipts. A digest binds that independent input but cannot authenticate it. The
+correction manifest cannot choose or replace this historical authority context.
 The initial PR has no accepted destination guard; predecessor verification of its
 exact tree and candidate CI supply the explicitly qualified bootstrap route.
 After that PR merges, the accepted destination guard governs subsequent PRs. Source rows
@@ -30,7 +38,7 @@ the accepted base, never from a PR. Changes to the registry itself require an
 ordinary predecessor-authorized Protocol PR; candidate additions are not usable
 until accepted. Unknown paths, global checkpoints and unclassified effects fail.
 
-The bootstrap guard rejects every modification of its workflow, guard, checker,
+The bootstrap guard rejects every modification of AGENTS.md, its workflow, guard, checker,
 dependency and lint configuration, bootstrap authority, notices and legacy corpus,
 even when the path is registered. This includes deletions and both rename sides.
 These frozen gate surfaces cannot be weakened by a candidate or a new registry
@@ -38,6 +46,8 @@ entry. A later gate upgrade needs a separately predecessor-qualified transfer;
 the ordinary bootstrap guard has no bypass or implicit upgrade capability.
 Functional package, new conformance tests and current topic documents use only
 the already registered future paths. The stable GitHub repository ID must match.
+Every existing and registered future path has an exact Git mode in the accepted
+registry. A mode-only change fails even when both modes denote regular files.
 
 Every subsequent change is PROTOCOL and NO_PRODUCTION. Keep checks on Linux and
 Windows, Node collector tests, offline/security/integrity conformance and complete

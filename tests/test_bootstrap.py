@@ -14,7 +14,37 @@ guard = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(guard)
 
 
+def registry_for(paths):
+    return {"paths": paths, "modes": {path: "100644" for path in paths}}
+
+
 class GuardTest(unittest.TestCase):
+    def test_mode_only_change_and_incomplete_registration_fail(self):
+        with (
+            patch.object(
+                guard.subprocess,
+                "check_output",
+                side_effect=[
+                    b"M\0module.py\0",
+                    b"100755 blob " + b"a" * 40 + b"\tmodule.py\0",
+                ],
+            ),
+            self.assertRaisesRegex(ValueError, "Registered file mode"),
+        ):
+            guard.inspect(
+                "a" * 40,
+                "b" * 40,
+                "WORKSTREAM_CLASS: PROTOCOL",
+                registry_for(["module.py"]),
+            )
+        with self.assertRaisesRegex(ValueError, "Incomplete accepted mode"):
+            guard.inspect(
+                "a" * 40,
+                "b" * 40,
+                "WORKSTREAM_CLASS: PROTOCOL",
+                {"paths": ["module.py"], "modes": {}},
+            )
+
     def test_gate_changes_cannot_qualify_themselves(self):
         for path in sorted(guard.FROZEN | {"compat/legacy/pytest.ini"}):
             with (
@@ -27,7 +57,10 @@ class GuardTest(unittest.TestCase):
                 self.assertRaisesRegex(ValueError, "PREDECESSOR_QUALIFICATION"),
             ):
                 guard.inspect(
-                    "a" * 40, "b" * 40, "WORKSTREAM_CLASS: PROTOCOL", {"paths": [path]}
+                    "a" * 40,
+                    "b" * 40,
+                    "WORKSTREAM_CLASS: PROTOCOL",
+                    registry_for([path]),
                 )
 
     def test_repository_recreation_is_not_the_same_destination(self):
@@ -42,7 +75,7 @@ class GuardTest(unittest.TestCase):
                 )
 
     def test_closed_scope_and_both_rename_sides(self):
-        registry = {"paths": ["docs/old.md", "docs/new.md"]}
+        registry = registry_for(["docs/old.md", "docs/new.md"])
         with patch.object(
             guard.subprocess,
             "check_output",
@@ -81,11 +114,11 @@ class GuardTest(unittest.TestCase):
                 "a" * 40,
                 "b" * 40,
                 "WORKSTREAM_CLASS: PROTOCOL",
-                {"paths": ["docs/new.md"]},
+                registry_for(["docs/new.md"]),
             )
         with self.assertRaises(ValueError):
             guard.inspect(
-                "a" * 40, "b" * 40, "WORKSTREAM_CLASS: PRODUCT", {"paths": []}
+                "a" * 40, "b" * 40, "WORKSTREAM_CLASS: PRODUCT", registry_for([])
             )
 
     def test_real_git_delta_and_candidate_registration_do_not_grant_authority(self):
@@ -120,7 +153,10 @@ class GuardTest(unittest.TestCase):
                 self.assertRaises(ValueError),
             ):
                 guard.inspect(
-                    base, head, "WORKSTREAM_CLASS: PROTOCOL", {"paths": ["allowed.md"]}
+                    base,
+                    head,
+                    "WORKSTREAM_CLASS: PROTOCOL",
+                    registry_for(["allowed.md"]),
                 )
 
     def test_runtime_has_no_application_dependency(self):
@@ -128,6 +164,7 @@ class GuardTest(unittest.TestCase):
             (ROOT / ".github/agent-protocol/bootstrap.json").read_text()
         )
         self.assertEqual(registry["repository"], "gabned/agent-protocol")
+        self.assertEqual(set(registry["paths"]), set(registry["modes"]))
         self.assertFalse(
             any(
                 p.startswith(("core/provelume/", "public/", "app/"))

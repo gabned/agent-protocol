@@ -7,6 +7,8 @@ application versions and paid infrastructure are outside its authority.
 The accepted predecessor transfer record selects the initial exact tree and the
 bootstrap contract. Neither a candidate nor a digest authenticates its own origin.
 Read docs/agent-protocol/bootstrap.md before implementation or publication.
+Once present on the accepted revision, read docs/agent-protocol/contract.md and
+select phase/host/workstream procedures through the accepted documents manifest.
 The compatibility corpus has its original identities and validators. Its embedded
 product-specific entrypoint and workflows are historical test inputs, not current
 instructions or executable GitHub workflows for this repository.

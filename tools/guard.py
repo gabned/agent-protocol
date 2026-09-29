@@ -8,6 +8,7 @@ from pathlib import Path
 
 FROZEN = frozenset(
     {
+        "AGENTS.md",
         ".github/workflows/ci.yml",
         "tools/guard.py",
         "tools/check.py",
@@ -38,6 +39,11 @@ def inspect(base, head, body, registry):
     if re.findall(r"(?m)^WORKSTREAM_CLASS:[ \t]*([^\r\n]+?)\r?$", body) != ["PROTOCOL"]:
         raise ValueError("Exactly one PROTOCOL workstream marker required")
     allowed = set(registry["paths"])
+    modes = registry["modes"]
+    if set(modes) != allowed or any(
+        value not in {"100644", "100755"} for value in modes.values()
+    ):
+        raise ValueError("Incomplete accepted mode inventory")
     raw = subprocess.check_output(
         [
             "git",
@@ -73,6 +79,8 @@ def inspect(base, head, body, registry):
             raise ValueError("Symlink or submodule is not an approved file")
         if name.decode() not in allowed:
             raise ValueError("Unregistered tree entry")
+        if meta.split()[0].decode() != modes[name.decode()]:
+            raise ValueError("Registered file mode mismatch")
     return {
         "result": "PASS",
         "base": base,
