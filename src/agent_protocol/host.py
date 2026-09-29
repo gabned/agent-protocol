@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote, unquote
 
-from .ledger import canonical, digest, exact, replay, require, sha, validate_identity
+from .ledger import canonical, digest, exact, principal, replay, require, sha, validate_identity
 from .lifecycle import DEPENDENCIES, evaluate
 from .qualification import (
     ci_evidence,
@@ -73,7 +73,7 @@ class GitJournal:
         # complete ancestry are reread on every operation; cache is never authority.
         self._verified = {}
         self.required_ancestor = sha(required_ancestor) if required_ancestor is not None else None
-        keys = set()
+        keys, self.signer_principals = set(), set()
         for line in allowed_signers.splitlines():
             fields = line.split()
             require(
@@ -95,6 +95,7 @@ class GitJournal:
                 "One public signing key cannot impersonate multiple principals",
             )
             keys.add(key)
+            self.signer_principals.add(principal(fields[0]))
         require(
             self.git("rev-parse", "--is-shallow-repository").strip() == b"false",
             "Shallow journal cannot prove complete history",
@@ -176,6 +177,13 @@ class GitJournal:
         )
         return replay(rows, identity=self.identity, authenticated_commits=principals)
 
+    def validate_plan(self, plan):
+        if plan["event"]["operation"] == "HANDOFF":
+            require(
+                principal(plan["event"]["payload"]["new_owner"]) in self.signer_principals,
+                "Handoff recipient is not in the independently enrolled signer registry",
+            )
+
     def commit_plan(self, plan, *, refresh_and_plan):
         """Only a fresh deterministic plan may be signed and CAS-appended.
 
@@ -184,6 +192,7 @@ class GitJournal:
         The public CLI does not expose an arbitrary journal writer.
         """
         exact(plan, "event expected_tip", "host write plan")
+        self.validate_plan(plan)
         current = self.read()
         prior = current["operations"].get(plan["event"]["operation_id"])
         if prior is not None:
@@ -195,6 +204,7 @@ class GitJournal:
         require(current["tip"] == plan["expected_tip"], "Concurrent journal head changed")
         refreshed = refresh_and_plan(current)
         require(same_plan(refreshed, plan), "Preconditions changed before signing")
+        self.validate_plan(refreshed)
         event = refreshed["event"]
         # Replay the new event before write. Authentication below is independently
         # verified again from the newly signed commit, before its ref is advanced.
@@ -357,7 +367,10 @@ class ProtocolHost:
             if request["operation_id"] in state["operations"]
             else self.observation(request, state["identity"])
         )
-        return evaluate(state, request, observation, self.authority(state))
+        plan = evaluate(state, request, observation, self.authority(state))
+        if request["operation"] == "HANDOFF":
+            self.journal.validate_plan(plan)
+        return plan
 
     def operate(self, request):
         self.journal.synchronize()

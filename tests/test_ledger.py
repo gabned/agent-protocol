@@ -91,6 +91,11 @@ class ReplayTests(unittest.TestCase):
         state = self.verify(events)
         self.assertEqual(state["owner"], "owner-b")
         self.assertEqual(state["identity"]["origin_owner"], "owner-a")
+        for invalid in ("", "*", "owner a", "owner\nnext", None, 7):
+            bad = copy.deepcopy(events[:3])
+            bad[-1]["payload"]["new_owner"] = invalid
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "principal"):
+                self.verify(bad)
         events[-1]["actor"] = "owner-a"
         with self.assertRaisesRegex(ValueError, "current authenticated owner"):
             self.verify(events)

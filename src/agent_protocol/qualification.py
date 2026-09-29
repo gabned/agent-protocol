@@ -176,7 +176,25 @@ def verify_reviews(collection, *, required_reviewers, now=None, review_head=None
         len(ids) == len(set(ids)) == len(comments) and set(ids) == {c["id"] for c in comments},
         "Thread history omits review comments",
     )
-    unresolved = [t["id"] for t in threads if not t["is_resolved"]]
+    applicable_threads = threads
+    applicable_reviews = active["reviews"]["items"]
+    if settling_head is not None:
+        # A thread rooted on the new live head cannot invalidate the retained
+        # merge. Keep A-origin threads even if GitHub later associates them with
+        # B, and conservatively retain any unproved/older origin. Completeness
+        # is still checked against every REST/GraphQL comment before filtering.
+        by_id = {c["id"]: c for c in comments}
+
+        def later_only(thread):
+            bound = [by_id[c.get("database_id", c.get("id"))] for c in thread["comments"]]
+            return collection["head"] != settling_head and bool(bound) and all(
+                c.get("commit_id") == c.get("original_commit_id") == collection["head"]
+                for c in bound
+            )
+
+        applicable_threads = [t for t in threads if not later_only(t)]
+        applicable_reviews = [r for r in applicable_reviews if r["commit_id"] == settling_head]
+    unresolved = [t["id"] for t in applicable_threads if not t["is_resolved"]]
     latest = {}
     require(
         len({r["id"] for r in active["reviews"]["items"]}) == len(active["reviews"]["items"]),
@@ -223,9 +241,9 @@ def verify_reviews(collection, *, required_reviewers, now=None, review_head=None
         "visibility": "OBSERVED" if visible else "REVIEWER_SESSION_UNOBSERVABLE",
         "digest": digest(
             {
-                "reviews": active["reviews"]["items"],
+                "reviews": applicable_reviews,
                 "head": review_head,
-                "threads": threads,
+                "threads": applicable_threads,
                 "viewer": viewer.get("response") if viewer else None,
             }
         ),

@@ -425,6 +425,25 @@ class SignedJournalTests(unittest.TestCase):
         )
         second_close = evaluate(state, request, native.observe(IDENTITY), authority)
         self.assertTrue(same_plan(first_close, second_close))
+        active = collection["preflight"]["active_pull_request"]
+        later_comment = {"id": 19, "commit_id": "8" * 40, "original_commit_id": "8" * 40}
+        collection["reviewComments"].append(later_comment)
+        pr["review_comments"] = 1
+        thread_list = active["threads"]["response"]["threads"]
+        thread_list.append({"id": "later-head-thread", "is_resolved": False,
+                            "comments": [{"database_id": 19}]})
+        unrelated = evaluate(state, request, native.observe(IDENTITY), authority)
+        self.assertTrue(same_plan(first_close, unrelated))
+        # A thread originally on A still applies when GitHub associates it with B.
+        later_comment["original_commit_id"] = "a" * 40
+        with self.assertRaisesRegex(ValueError, "Post-merge delivery"):
+            evaluate(state, request, native.observe(IDENTITY), authority)
+        later_comment.pop("original_commit_id")
+        with self.assertRaisesRegex(ValueError, "Post-merge delivery"):
+            evaluate(state, request, native.observe(IDENTITY), authority)
+        collection["reviewComments"].clear()
+        thread_list.clear()
+        pr["review_comments"] = 0
         wrong_merge = native.observe(IDENTITY)
         wrong_merge["merge"]["merge_sha"] = "7" * 40
         with self.assertRaisesRegex(ValueError, "reconciled merge identity"):
@@ -725,6 +744,20 @@ class SignedJournalTests(unittest.TestCase):
             self.assertEqual(host.publish()["state"], "DURABLE")
             self.assertEqual(fresh.synchronize()["state"], "RESTORED")
             self.assertEqual(fresh.read()["status"], "INTERRUPTED")
+            handoff = event("HANDOFF", 3, {"new_owner": "owner-b",
+                "authorization": "synthetic-exact-grant", "material": "artifact:synthetic"})
+            handoff["expected_previous"] = host.tip()
+            handoff_plan = {"event": handoff, "expected_tip": host.tip()}
+            before_handoff = host.tip()
+            with self.assertRaisesRegex(ValueError, "enrolled signer registry"):
+                host.commit_plan(handoff_plan, refresh_and_plan=lambda state: handoff_plan)
+            self.assertEqual(host.tip(), before_handoff)
+            # Enrollment is explicit host configuration, never implicit in a grant.
+            second_key = root / "second-synthetic-key"
+            command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(second_key))
+            enrolled = GitJournal(repo, IDENTITY,
+                signers.strip() + "\nowner-b " + second_key.with_suffix(".pub").read_text())
+            enrolled.validate_plan(handoff_plan)
             self.assertEqual(fresh.synchronize()["state"], "CURRENT")
             with self.assertRaisesRegex(ValueError, "recovery anchor"):
                 GitJournal(restored, IDENTITY, signers, required_ancestor="f" * 40).read()

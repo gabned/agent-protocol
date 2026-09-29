@@ -41,6 +41,14 @@ def sha(value):
     return value
 
 
+def principal(value):
+    require(
+        isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.:@/-]+", value),
+        "Exact valid signer principal required",
+    )
+    return value
+
+
 IDENTITY = "repository repository_id pr branch workstream workstream_class origin_owner"
 EVENT = (
     "schema operation_id request_sha256 operation actor expected_previous "
@@ -63,6 +71,7 @@ OPERATIONS = {
 
 def validate_identity(value):
     exact(value, IDENTITY, "identity")
+    principal(value["origin_owner"])
     require(
         re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value["repository"]),
         "Repository identity required",
@@ -203,6 +212,7 @@ def apply(state, event):
         state["status"] = "ACTIVE"
     elif operation == "HANDOFF":
         exact(payload, "new_owner authorization material", "handoff")
+        principal(payload["new_owner"])
         require(
             state["status"] == "INTERRUPTED"
             and payload["new_owner"] != state["owner"]
