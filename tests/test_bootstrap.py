@@ -23,6 +23,124 @@ def registry_for(paths):
 
 
 class GuardTest(unittest.TestCase):
+    def setUp(self):
+        self.history = patch.object(
+            guard, "introduced_commits", side_effect=lambda base, head: [(base, head)]
+        )
+        self.history.start()
+        self.addCleanup(self.history.stop)
+
+    def test_all_retained_commits_are_checked(self):
+        self.history.stop()
+        original = subprocess.check_output
+        for attack in (
+            "hidden",
+            "frozen",
+            "mode",
+            "diverged",
+            "merge",
+            "shallow",
+            "replacement",
+        ):
+            with self.subTest(attack=attack), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+
+                def git(*args, root=root):
+                    return original(["git", "-C", str(root), *args]).decode().strip()
+
+                git("init", "-q")
+                git("config", "user.name", "Synthetic")
+                git("config", "user.email", "synthetic@example.invalid")
+                (root / "allowed.md").write_text("base")
+                (root / "AGENTS.md").write_text("accepted policy")
+                git("add", ".")
+                git("commit", "-qm", "base")
+                base = git("rev-parse", "HEAD")
+                if attack == "hidden":
+                    (root / "unapproved.txt").write_text("synthetic forbidden material")
+                    git("add", ".")
+                elif attack == "frozen":
+                    (root / "AGENTS.md").write_text("unaccepted policy")
+                    git("add", ".")
+                elif attack == "mode":
+                    git("update-index", "--chmod=+x", "allowed.md")
+                else:
+                    (root / "allowed.md").write_text("intermediate")
+                    git("add", ".")
+                git("commit", "-qm", "intermediate")
+                middle = git("rev-parse", "HEAD")
+                if attack == "hidden":
+                    (root / "unapproved.txt").unlink()
+                if attack == "mode":
+                    git("update-index", "--chmod=-x", "allowed.md")
+                (root / "AGENTS.md").write_text("accepted policy")
+                (root / "allowed.md").write_text("final")
+                git("add", ".")
+                git("commit", "-qm", "final")
+                head = git("rev-parse", "HEAD")
+                if attack == "diverged":
+                    base = git("commit-tree", base + "^{tree}", "-m", "unrelated")
+                elif attack == "merge":
+                    head = git(
+                        "commit-tree",
+                        head + "^{tree}",
+                        "-p",
+                        head,
+                        "-p",
+                        base,
+                        "-m",
+                        "merge",
+                    )
+                elif attack == "shallow":
+                    (root / ".git/shallow").write_text(base + "\n")
+                elif attack == "replacement":
+                    git("replace", middle, base)
+
+                def invoke(argv, root=root):
+                    return original(argv, cwd=root)
+
+                with (
+                    patch.object(guard.subprocess, "check_output", side_effect=invoke),
+                    self.assertRaises(ValueError),
+                ):
+                    guard.inspect(
+                        base,
+                        head,
+                        "WORKSTREAM_CLASS: PROTOCOL",
+                        registry_for(["allowed.md", "AGENTS.md"]),
+                    )
+
+    def test_linear_multicommit_history_preserved(self):
+        self.history.stop()
+        original = subprocess.check_output
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            def git(*args):
+                return original(["git", "-C", str(root), *args]).decode().strip()
+
+            git("init", "-q")
+            git("config", "user.name", "Synthetic")
+            git("config", "user.email", "synthetic@example.invalid")
+            commits = []
+            for text in ("base", "first", "second"):
+                (root / "allowed.md").write_text(text)
+                git("add", ".")
+                git("commit", "-qm", text)
+                commits.append(git("rev-parse", "HEAD"))
+
+            def invoke(argv):
+                return original(argv, cwd=root)
+
+            with patch.object(guard.subprocess, "check_output", side_effect=invoke):
+                result = guard.inspect(
+                    commits[0],
+                    commits[-1],
+                    "WORKSTREAM_CLASS: PROTOCOL",
+                    registry_for(["allowed.md"]),
+                )
+            self.assertEqual(result["commits"], commits[1:])
+
     def test_current_collector_failure_reaches_native_runner(self):
         original_run = subprocess.run
         with tempfile.TemporaryDirectory() as tmp:

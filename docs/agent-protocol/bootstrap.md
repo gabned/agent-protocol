@@ -44,6 +44,13 @@ even when the path is registered. This includes deletions and both rename sides.
 These frozen gate surfaces cannot be weakened by a candidate or a new registry
 entry. A later gate upgrade needs a separately predecessor-qualified transfer;
 the ordinary bootstrap guard has no bypass or implicit upgrade capability.
+The candidate must be a complete linear chain from the accepted base. Every
+introduced commit tree and delta is checked, including intermediate files,
+mode changes and both rename sides. Restoring or deleting an unapproved path
+at the tip does not remove its historical effect. Candidate merge commits,
+unrelated ancestry, shallow history, replacements and grafts are refused;
+the final integration remains a normal merge preserving the qualified chain.
+Case-insensitive file collisions are refused in every introduced tree.
 Functional package, new conformance tests and current topic documents use only
 the already registered future paths. The stable GitHub repository ID must match.
 The native checker requires the entire registered functional inventory once any
