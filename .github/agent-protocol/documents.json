@@ -1,0 +1,162 @@
+{
+  "schema": "agent-protocol-documents/v2",
+  "documents": [
+    {
+      "path": "docs/agent-protocol/contract.md",
+      "sha256": "57a20e326afe5bcee5d308446156359355c2ae379f413f8daa624ed2e56b92d7",
+      "phases": [
+        "START",
+        "IMPLEMENT",
+        "QUALIFY",
+        "INTEGRATE",
+        "RECOVER",
+        "CLOSE",
+        "ADOPT",
+        "PUBLISH"
+      ],
+      "hosts": [
+        "CLI",
+        "CONNECTOR",
+        "CI",
+        "BROWSER"
+      ],
+      "workstreams": [
+        "PROTOCOL",
+        "PRODUCT"
+      ]
+    },
+    {
+      "path": "docs/agent-protocol/communication.md",
+      "sha256": "d2d17768527d8db5331360aa00e6e002e18c0a71557c522f20a242cb062f2408",
+      "phases": [
+        "START",
+        "IMPLEMENT",
+        "QUALIFY",
+        "INTEGRATE",
+        "RECOVER",
+        "CLOSE",
+        "ADOPT",
+        "PUBLISH"
+      ],
+      "hosts": [
+        "CLI",
+        "CONNECTOR",
+        "CI",
+        "BROWSER"
+      ],
+      "workstreams": [
+        "PROTOCOL",
+        "PRODUCT"
+      ]
+    },
+    {
+      "path": "docs/agent-protocol/lifecycle.md",
+      "sha256": "d794c7b414b483a504a707d1351a64271110f48f09c81e53c8438b36865fdaa1",
+      "phases": [
+        "START",
+        "RECOVER",
+        "INTEGRATE",
+        "CLOSE"
+      ],
+      "hosts": [
+        "CLI",
+        "CONNECTOR",
+        "CI",
+        "BROWSER"
+      ],
+      "workstreams": [
+        "PROTOCOL",
+        "PRODUCT"
+      ]
+    },
+    {
+      "path": "docs/agent-protocol/qualification.md",
+      "sha256": "004edd36535d0cf47b9e36dac36cccfc3e4acd77620860f42adcd44e72465d38",
+      "phases": [
+        "QUALIFY",
+        "INTEGRATE"
+      ],
+      "hosts": [
+        "CLI",
+        "CONNECTOR",
+        "CI",
+        "BROWSER"
+      ],
+      "workstreams": [
+        "PROTOCOL",
+        "PRODUCT"
+      ]
+    },
+    {
+      "path": "docs/agent-protocol/hosts.md",
+      "sha256": "fa31eaf235644f0f5799310441436725449ec1f75e4c2943629dd2b7c2f6f119",
+      "phases": [
+        "START",
+        "RECOVER",
+        "PUBLISH"
+      ],
+      "hosts": [
+        "CLI",
+        "CONNECTOR",
+        "CI",
+        "BROWSER"
+      ],
+      "workstreams": [
+        "PROTOCOL",
+        "PRODUCT"
+      ]
+    },
+    {
+      "path": "docs/agent-protocol/adoption.md",
+      "sha256": "8c348b2b47f5af55efaacb587426b123fb99c432805d208fa07e68ff758ffe9b",
+      "phases": [
+        "ADOPT"
+      ],
+      "hosts": [
+        "CLI",
+        "CONNECTOR",
+        "CI",
+        "BROWSER"
+      ],
+      "workstreams": [
+        "PROTOCOL",
+        "PRODUCT"
+      ]
+    },
+    {
+      "path": "docs/agent-protocol/compatibility.md",
+      "sha256": "6b8a3eb407f8327f1e81b42bd5e0c6acc342ca647e649cc81b277c62317e0bf1",
+      "phases": [
+        "ADOPT",
+        "RECOVER"
+      ],
+      "hosts": [
+        "CLI",
+        "CONNECTOR",
+        "CI",
+        "BROWSER"
+      ],
+      "workstreams": [
+        "PROTOCOL",
+        "PRODUCT"
+      ]
+    },
+    {
+      "path": "docs/agent-protocol/publication.md",
+      "sha256": "453f4960c8acfbe19cf9823a90a923b30c0a7b574043519d1e47a8318e868ad9",
+      "phases": [
+        "PUBLISH"
+      ],
+      "hosts": [
+        "CLI",
+        "CONNECTOR",
+        "CI",
+        "BROWSER"
+      ],
+      "workstreams": [
+        "PROTOCOL",
+        "PRODUCT"
+      ]
+    }
+  ]
+}

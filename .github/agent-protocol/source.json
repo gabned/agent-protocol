@@ -1,0 +1,14 @@
+{
+  "schema": "agent-protocol-origin/v1",
+  "source_repository": "gabned/provelume",
+  "source_commit": "e0a0812b42694f629bcf631e7f2224376bc87e2d",
+  "authority_transfer_repository": "gabned/provelume",
+  "authority_transfer_commit": "03f93074219f221d8c3103b98695191b8407bdce",
+  "authority_transfer_manifest": ".github/agent-protocol/transfer-v1.5.0.json",
+  "authority_transfer_manifest_sha256": "836635c75bb2c0967a073021f0f80d141c1612d60226699363f97b18991900c5",
+  "destination_repository": "gabned/agent-protocol",
+  "destination_id": 1393711644,
+  "accepted_bootstrap_commit": "ed2e8c1d6d816289c2fcab5f583d6d258bb3243f",
+  "provenance_role": "LOCATOR_REQUIRES_INDEPENDENT_AUTHENTICATION",
+  "application_history_imported": false
+}
