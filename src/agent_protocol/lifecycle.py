@@ -326,6 +326,7 @@ def evaluate(state, request, observation, authority, *, now=None):
                     "owner": state["owner"],
                     "tip": state["tip"],
                     "head": state["head"],
+                    "observed_head": current["HEAD"],
                 },
                 "Explicit abandonment authority missing",
             )
@@ -333,6 +334,8 @@ def evaluate(state, request, observation, authority, *, now=None):
                 "reason": p["reason"],
                 "authorization": grant,
                 "material": observation["material"],
+                "previous_head": state["head"],
+                "coordinates": current,
             }
         else:
             raise ValueError("Unknown operation")
@@ -349,4 +352,4 @@ def evaluate(state, request, observation, authority, *, now=None):
     }
     preview = deepcopy(state)
     apply(preview, event)
-    return {"event": event, "expected_tip": state["tip"]}
+    return {"event": deepcopy(event), "expected_tip": state["tip"]}

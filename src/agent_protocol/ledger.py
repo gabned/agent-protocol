@@ -180,7 +180,8 @@ def apply(state, event):
         )
         return
     require(
-        operation == "RECONCILE_NOT_APPLIED" or event["expected_head"] == state["head"],
+        operation in {"RECONCILE_NOT_APPLIED", "ABANDON"}
+        or event["expected_head"] == state["head"],
         "Unexpected candidate head",
     )
     if operation == "INTERRUPT":
@@ -270,9 +271,17 @@ def apply(state, event):
         )
         state["status"] = "CLOSED"
     elif operation == "ABANDON":
-        exact(payload, "reason material authorization", "abandonment")
+        exact(payload, "reason material authorization previous_head coordinates", "abandonment")
         require(
-            state["status"] in {"ACTIVE", "INTERRUPTED", "QUALIFIED"} and all(payload.values()),
+            state["status"] in {"ACTIVE", "INTERRUPTED", "QUALIFIED"}
+            and all(payload.values())
+            and payload["previous_head"] == state["head"]
+            and payload["coordinates"]["HEAD"] == event["expected_head"],
             "Abandonment cannot hide an uncertain integration",
         )
-        state["status"] = "ABANDONED"
+        state.update(
+            status="ABANDONED",
+            head=event["expected_head"],
+            coordinates=deepcopy(payload["coordinates"]),
+            qualification=None,
+        )

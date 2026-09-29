@@ -188,8 +188,12 @@ def verify_reviews(collection, *, required_reviewers, now=None):
         for name in required_reviewers
     )
     blocked = any(r["state"] == "CHANGES_REQUESTED" for r in latest.values())
+    pending = any(
+        r["state"] == "PENDING" and r["user"]["login"] in required_reviewers
+        for r in active["reviews"]["items"]
+    )
     return {
-        "result": "PASS" if approved and not blocked and not unresolved else "FAIL",
+        "result": "PASS" if approved and not blocked and not pending and not unresolved else "FAIL",
         "unresolved": unresolved,
         "digest": digest({"reviews": active["reviews"]["items"], "threads": threads}),
     }

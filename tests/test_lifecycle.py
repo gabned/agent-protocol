@@ -267,6 +267,7 @@ class PreconditionsTests(unittest.TestCase):
                         "owner": "owner-a",
                         "tip": state["tip"],
                         "head": state["head"],
+                        "observed_head": obs["head"],
                     }
                     append(
                         "ABANDON", 5, {"reason": "Closed without integration", "grant": "abandon"}
@@ -320,6 +321,82 @@ class PreconditionsTests(unittest.TestCase):
             )
         self.assertEqual(state["status"], "CLOSED")
         self.assertEqual(len(state["events"]), 5)
+
+    def test_closed_moved_head_can_be_abandoned_only_with_exact_observed_head_grant(self):
+        for previous_status in ("ACTIVE", "QUALIFIED", "INTERRUPTED"):
+            state, request, obs, auth = fixture()
+            auth["operations"].append("ABANDON")
+            obs["coordinates"]["AUTHORITY"] = digest(
+                {
+                    k: auth[k]
+                    for k in (
+                        "identity",
+                        "principal",
+                        "operations",
+                        "capabilities",
+                        "signer_registry",
+                    )
+                }
+            )
+            events = []
+            operations = ["START"] + (
+                {"ACTIVE": [], "QUALIFIED": ["QUALIFY"], "INTERRUPTED": ["INTERRUPT"]}[
+                    previous_status
+                ]
+            )
+            for index, operation in enumerate(operations, 1):
+                request.update(
+                    operation=operation,
+                    operation_id="closed-" + operation.lower(),
+                    expected_tip=state["tip"],
+                    parameters={"reason": "stop"} if operation == "INTERRUPT" else {},
+                )
+                plan = self.evaluate(state, request, obs, auth)
+                events.append(
+                    {
+                        "commit": str(index) * 40,
+                        "parents": [state["tip"]] if state["tip"] else [],
+                        "event": plan["event"],
+                    }
+                )
+                state = replay(
+                    events,
+                    identity=IDENTITY,
+                    authenticated_commits={r["commit"]: "owner-a" for r in events},
+                )
+            self.assertEqual(state["status"], previous_status)
+            obs["head"] = obs["coordinates"]["HEAD"] = "f" * 40
+            obs["coordinates"]["PR_STATE"] = "CLOSED"
+            request.update(
+                operation="ABANDON",
+                operation_id="closed-abandon",
+                expected_tip=state["tip"],
+                expected_head="f" * 40,
+                parameters={"reason": "Authorized closure", "grant": "cancel"},
+            )
+            grant = {
+                "operation": "ABANDON",
+                "identity": IDENTITY,
+                "owner": "owner-a",
+                "tip": state["tip"],
+                "head": "a" * 40,
+                "observed_head": "f" * 40,
+            }
+            auth["grants"]["cancel"] = {**grant, "observed_head": "a" * 40}
+            with self.assertRaisesRegex(ValueError, "abandonment authority"):
+                self.evaluate(state, request, obs, auth)
+            auth["grants"]["cancel"] = grant
+            plan = self.evaluate(state, request, obs, auth)
+            events.append({"commit": "3" * 40, "parents": [state["tip"]], "event": plan["event"]})
+            final = replay(
+                events,
+                identity=IDENTITY,
+                authenticated_commits={r["commit"]: "owner-a" for r in events},
+            )
+            self.assertEqual(final["status"], "ABANDONED")
+            self.assertEqual(final["head"], "f" * 40)
+            self.assertEqual(final["events"][:-1], state["events"])
+            self.assertEqual(self.evaluate(final, request, {}, auth), plan)
 
     def test_candidate_cannot_override_authority_identity_head_or_effects(self):
         for kind in ["head", "owner", "repository", "effects", "escalation", "stale", "extra"]:

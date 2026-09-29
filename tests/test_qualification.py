@@ -339,6 +339,11 @@ class QualificationTests(unittest.TestCase):
             {"id": 3, "user": {"login": "reviewer"}, "state": "APPROVED", "commit_id": "a" * 40}
         )
         self.assertEqual(verify_reviews(collection, **args)["result"], "PASS")
+        reviews.append(
+            {"id": 4, "user": {"login": "reviewer"}, "state": "PENDING", "commit_id": "a" * 40}
+        )
+        self.assertEqual(verify_reviews(collection, **args)["result"], "FAIL")
+        reviews.pop()
         collection["preflight"]["active_pull_request"]["threads"]["response"]["threads"] = []
         with self.assertRaises(ValueError):
             verify_reviews(collection, **args)

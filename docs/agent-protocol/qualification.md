@@ -18,6 +18,9 @@ policy. A candidate cannot remove a required lane, select only successful runs,
 hide attempts or declare CI inapplicable. Review/thread inventories must be
 complete, with current applicable review requirements fulfilled. A pending review
 is not complete, and a resolved thread does not erase its original finding.
+An applicable reviewer's pending review blocks completion even if an older exact-head
+approval exists. Recollection timestamps remain observation metadata; stable close
+plans retain the complete CI identity/results without treating time alone as a change.
 
 The provider adapter `CODEX_SUMMARY_V1` requires the independently enrolled numeric
 bot identity and separate CODE/SECURITY completion on the exact candidate. It reads

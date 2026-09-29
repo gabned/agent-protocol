@@ -11,7 +11,7 @@ import os
 import subprocess
 import tempfile
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -19,8 +19,9 @@ from test_ledger import IDENTITY, event, start
 from test_lifecycle import fixture
 from test_qualification import protocol_fixture
 
-from agent_protocol.host import GitHubCLI, GitJournal, NativeGitHubHost, ProtocolHost
-from agent_protocol.ledger import digest
+from agent_protocol.host import GitHubCLI, GitJournal, NativeGitHubHost, ProtocolHost, same_plan
+from agent_protocol.ledger import digest, replay
+from agent_protocol.lifecycle import evaluate
 
 
 class SignedJournalTests(unittest.TestCase):
@@ -35,6 +36,7 @@ class SignedJournalTests(unittest.TestCase):
             return [fresh(v) for v in value] if isinstance(value, list) else value
 
         collection = fresh(collection)
+        collection["preflight"]["repo"]["response"]["default_branch"] = "main"
         pr = collection["preflight"]["active_pull_request"]["pr"]["response"]
         pr["head"].update(ref=IDENTITY["branch"], repo={"id": 17})
         pr["base"].update(ref="main", repo={"id": 17, "full_name": IDENTITY["repository"]})
@@ -126,6 +128,12 @@ class SignedJournalTests(unittest.TestCase):
         )
         self.assertTrue(all(g["result"] == "PASS" for g in first["gates"]))
         self.assertEqual(first["coordinates"]["POLICY"], digest(authority["policy"]))
+        original_body = pr["body"]
+        pr["body"] = ""
+        with self.assertRaisesRegex(ValueError, "workstream marker"):
+            native.observe(IDENTITY)
+        self.assertEqual(native.observe(IDENTITY, recovery=True)["gates"], [])
+        pr["body"] = original_body
         pr["draft"] = True
         draft = native.observe(IDENTITY)
         self.assertEqual(
@@ -170,6 +178,109 @@ class SignedJournalTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "production-trigger"):
             native.merge(**args)
         self.assertEqual(len(mutations), count)
+
+        # Exercise the actual native recovery collection and typed explain path.
+        enabled[0] = False
+        authority["operations"].append("RECONCILE_NOT_APPLIED")
+        native.journal = SimpleNamespace(read=lambda: state, synchronize=lambda: None)
+        events = []
+        for index, operation in enumerate(("START", "QUALIFY", "INTEGRATE"), 1):
+            request = dict(
+                operation=operation,
+                operation_id="native-" + operation.lower(),
+                expected_tip=state["tip"],
+                expected_head="a" * 40,
+                parameters={},
+            )
+            plan = evaluate(state, request, native.observe(IDENTITY), authority)
+            events.append(
+                {
+                    "commit": str(index) * 40,
+                    "parents": [state["tip"]] if state["tip"] else [],
+                    "event": plan["event"],
+                }
+            )
+            state = replay(
+                events,
+                identity=IDENTITY,
+                authenticated_commits={row["commit"]: "owner-a" for row in events},
+            )
+        authority["grants"]["rejected"] = dict(
+            operation="RECONCILE_NOT_APPLIED",
+            identity=IDENTITY,
+            intent_tip=state["tip"],
+            intent_operation="native-integrate",
+            intent_head="a" * 40,
+            kind="DEFINITIVELY_REJECTED",
+            source="authenticated:synthetic-rejection",
+            quiescent=True,
+        )
+        request.update(
+            operation="RECONCILE_NOT_APPLIED",
+            operation_id="native-recovery",
+            expected_tip=state["tip"],
+            expected_head="f" * 40,
+            parameters={"grant": "rejected"},
+        )
+        collection["head"] = pr["head"]["sha"] = "f" * 40
+        pr["body"] = "invalid candidate marker"
+        collection["trees"][0]["commit"]["response"]["parents"] = []
+        host = ProtocolHost(
+            native.journal,
+            collect=native.observe,
+            authority=native.authority,
+            merge=lambda **kw: self.fail("Recovery must never merge"),
+            collect_recovery=lambda identity: native.observe(identity, recovery=True),
+        )
+        plan = host.explain(request)
+        self.assertEqual(plan["event"]["payload"]["intent_head"], "a" * 40)
+        self.assertEqual(plan["event"]["expected_head"], "f" * 40)
+
+        # The real post-merge native collector may run in different seconds.
+        collection["head"] = pr["head"]["sha"] = "a" * 40
+        pr.update(merged=True, state="closed", body=original_body)
+        collection["postMerge"] = copy.deepcopy(collection["ci"])
+        post = collection["postMerge"]
+        post["head_sha"] = "e" * 40
+        for run in post["inventory"][0]["response"]["workflow_runs"]:
+            run.update(head_sha="e" * 40, event="push")
+        for history in post["histories"]:
+            history["attempt"]["response"].update(head_sha="e" * 40, event="push")
+            for job_page in history["jobs"]:
+                for job in job_page["response"]["jobs"]:
+                    job["head_sha"] = "e" * 40
+        stamp = (datetime.now(UTC) - timedelta(seconds=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        post["inventory"][0]["observed_at"] = stamp
+        request.update(
+            operation="RECONCILE",
+            operation_id="native-reconcile",
+            expected_head="a" * 40,
+            parameters={},
+        )
+        plan = evaluate(state, request, native.observe(IDENTITY), authority)
+        events.append({"commit": "4" * 40, "parents": [state["tip"]], "event": plan["event"]})
+        state = replay(
+            events,
+            identity=IDENTITY,
+            authenticated_commits={row["commit"]: "owner-a" for row in events},
+        )
+        request.update(
+            operation="CLOSE",
+            operation_id="native-close",
+            expected_tip=state["tip"],
+            parameters={"next_action": "Review the next objective", "next_location": "here"},
+        )
+        first_close = evaluate(state, request, native.observe(IDENTITY), authority)
+        post["inventory"][0]["observed_at"] = (datetime.now(UTC) - timedelta(seconds=5)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        second_close = evaluate(state, request, native.observe(IDENTITY), authority)
+        self.assertTrue(same_plan(first_close, second_close))
+        post["histories"][0]["jobs"][0]["response"]["jobs"][0]["conclusion"] = "failure"
+        post["histories"][0]["attempt"]["response"]["conclusion"] = "failure"
+        post["inventory"][0]["response"]["workflow_runs"][0]["conclusion"] = "failure"
+        with self.assertRaisesRegex(ValueError, "Post-merge delivery"):
+            evaluate(state, request, native.observe(IDENTITY), authority)
 
     def test_native_gh_transport_has_no_generic_write_or_cross_repository_route(self):
         calls = []
@@ -429,6 +540,26 @@ class SignedJournalTests(unittest.TestCase):
                 GitJournal(restored, IDENTITY, signers, required_ancestor="f" * 40).read()
             with self.assertRaisesRegex(ValueError, "wildcard"):
                 GitJournal(restored, IDENTITY, signers.replace("owner-a ", "* "))
+            collision = {**IDENTITY, "branch": "agent-protocol/work/pr-4"}
+            with self.assertRaisesRegex(ValueError, "reserved journal namespace"):
+                GitJournal(repo, collision, signers)
+            # A retained local copy with its original enrollment cannot recreate
+            # deleted durable history, including after constructing a fresh host.
+            original_git = host.git
+
+            def delete_before_push(*args, **kwargs):
+                if args[0] == "push":
+                    command("git", "--git-dir", str(remote), "update-ref", "-d", host.ref)
+                return original_git(*args, **kwargs)
+
+            host.git = delete_before_push
+            with self.assertRaisesRegex(ValueError, "Publication uncertain or concurrent"):
+                host.publish()
+            host.git = original_git
+            for retained in (host, GitJournal(repo, IDENTITY, signers)):
+                with self.assertRaisesRegex(ValueError, "remote journal is missing"):
+                    retained.publish()
+            self.assertEqual(command("git", "--git-dir", str(remote), "for-each-ref", host.ref), "")
 
 
 if __name__ == "__main__":

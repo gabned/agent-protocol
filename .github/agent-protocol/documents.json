@@ -51,7 +51,7 @@
     },
     {
       "path": "docs/agent-protocol/lifecycle.md",
-      "sha256": "ecc3198d0143e009314314710e29f1a69461658b940ba8a7a449389ceda49354",
+      "sha256": "d5b7b8afd8e074140c737c1e56cbc97e7900d4b7e8ffb4369c0c185eb43a4f24",
       "phases": [
         "START",
         "RECOVER",
@@ -71,7 +71,7 @@
     },
     {
       "path": "docs/agent-protocol/qualification.md",
-      "sha256": "3d077a369e4f85747a1e351fa992727afd4fb847454b6e6ce2327bcb3e2eee28",
+      "sha256": "007239befe64b9844874b1d53a98ddce7119581696c151140d10144153f2d6cc",
       "phases": [
         "QUALIFY",
         "INTEGRATE"
@@ -89,7 +89,7 @@
     },
     {
       "path": "docs/agent-protocol/hosts.md",
-      "sha256": "f3d3b0c743b285ecbe598acb641726a6de0625f6e1f2d27c8aa7f5b6d7af5b23",
+      "sha256": "92a4ce473bd6a010ce0157897170e1502e1a758da20e83f4746abfa37c32e4c1",
       "phases": [
         "START",
         "RECOVER",

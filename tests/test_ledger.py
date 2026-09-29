@@ -151,6 +151,8 @@ class ReplayTests(unittest.TestCase):
                     "reason": "authorized cancellation",
                     "material": "artifact:synthetic",
                     "authorization": "grant:synthetic",
+                    "previous_head": "a" * 40,
+                    "coordinates": {"HEAD": "a" * 40},
                 },
             ),
         ]

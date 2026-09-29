@@ -20,7 +20,15 @@ Explain can operate offline and never authorizes a write. Before signing an even
 the host refreshes the same observations and reevaluates the typed request.
 An unchanged deterministic error is not a reason for equivalent retries.
 
-Publication of journal events is an ordinary fast-forward push. Reobserve the
+Publication of journal events requires verified fast-forward ancestry and an
+exact old-ref Git lease. The lease is compare-and-swap, never authorization for
+non-fast-forward history; deletion or concurrent advancement rejects the push.
+An absent remote with retained local history is not a new journal. Only this
+host process's fresh, unattempted initial START may create the ref. A lost initial
+publication response must be reconciled from the remote or retained external
+evidence; absence cannot authorize recreation. Recovery enrollment retains an
+independently observed ancestor. Candidate branches cannot use the journal namespace.
+Reobserve the
 remote ref after an uncertain result and reconcile the existing operation ID.
 Recovery refuses shallow history, grafts, replacements, missing signatures and
 divergence. No candidate code runs in the credentialed host during collection.

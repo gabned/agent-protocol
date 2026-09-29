@@ -53,6 +53,12 @@ class GitJournal:
         self.git_config = tuple(git_config)
         self.ref = f"refs/heads/agent-protocol/work/pr-{identity['pr']}"
         require(
+            not identity["branch"].casefold().startswith("agent-protocol/work/"),
+            "Candidate branch collides with reserved journal namespace",
+        )
+        self._new_local_tip = None
+        self._creation_attempted = False
+        require(
             isinstance(allowed_signers, str) and allowed_signers.strip(),
             "Accepted public signer registry required",
         )
@@ -214,17 +220,45 @@ class GitJournal:
             if actual["operations"].get(event["operation_id"]) == event:
                 return {"state": "APPLIED_RECONCILED", "tip": actual["tip"]}
             raise ValueError("Concurrent write refused; reconcile existing journal")
+        if current["tip"] is None:
+            self._new_local_tip = commit
         return {"state": "APPLIED_LOCAL", "tip": commit, "publication": "REQUIRED"}
 
     def publish(self):
         """Normal fast-forward Git push only; a remote concurrent append refuses."""
-        self.synchronize()
+        synchronized = self.synchronize()
         self.read()
         tip = self.tip()
         require(tip is not None, "No durable event to publish")
-        result = self.git("push", "origin", tip + ":" + self.ref, allow_failure=True)
+        expected = synchronized.get("remote_tip", synchronized.get("tip"))
+        if synchronized["state"] == "NOT_PUBLISHED":
+            expected = None
+            require(
+                tip == self._new_local_tip and not self._creation_attempted,
+                "Initial publication requires this host's unattempted START",
+            )
+            self._creation_attempted = True
+        if expected is not None:
+            require(
+                self.git(
+                    "merge-base", "--is-ancestor", expected, tip, allow_failure=True
+                ).returncode
+                == 0,
+                "Journal publication cannot rewrite remote history",
+            )
+        # The lease is an exact old-ref CAS, never permission for non-fast-forward
+        # history: ancestry above is mandatory. It also refuses deletion races.
+        result = self.git(
+            "push",
+            "--force-with-lease=" + self.ref + ":" + (expected or ""),
+            "origin",
+            tip + ":" + self.ref,
+            allow_failure=True,
+        )
         observed = self.git("ls-remote", "--refs", "origin", self.ref).decode().split()
         if observed and observed[0] == tip:
+            self.required_ancestor = tip
+            self._new_local_tip = None
             return {"state": "DURABLE", "tip": tip}
         require(
             result.returncode == 0,
@@ -241,13 +275,21 @@ class GitJournal:
         )
         observed = self.git("ls-remote", "--refs", "origin", self.ref).decode().splitlines()
         if not observed:
-            require(self.required_ancestor is None, "Previously observed remote journal is missing")
+            require(
+                self.required_ancestor is None
+                and (
+                    before["tip"] is None
+                    or (before["tip"] == self._new_local_tip and not self._creation_attempted)
+                ),
+                "Previously observed or retained remote journal is missing",
+            )
             return {"state": "NOT_PUBLISHED", "tip": before["tip"]}
         require(len(observed) == 1, "Ambiguous remote journal")
         remote_tip, remote_ref = observed[0].split()
         sha(remote_tip)
         require(remote_ref == self.ref, "Remote journal identity mismatch")
         if remote_tip == before["tip"]:
+            self.required_ancestor = remote_tip
             return {"state": "CURRENT", "tip": remote_tip}
         self.git("fetch", "--no-tags", "origin", self.ref)
         fetched = self.git("rev-parse", "FETCH_HEAD").decode().strip()
@@ -261,6 +303,7 @@ class GitJournal:
         local_commits = [row["commit"] for row in before["events"]]
         remote_commits = [row["commit"] for row in remote_state["events"]]
         if remote_commits == local_commits[: len(remote_commits)]:
+            self.required_ancestor = remote_tip
             return {"state": "LOCAL_PENDING", "tip": before["tip"], "remote_tip": remote_tip}
         require(
             local_commits == remote_commits[: len(local_commits)],
@@ -270,6 +313,7 @@ class GitJournal:
             "update-ref", self.ref, remote_tip, before["tip"] or "0" * 40, allow_failure=True
         )
         require(result.returncode == 0, "Local journal changed during reconciliation")
+        self.required_ancestor = remote_tip
         return {"state": "RESTORED", "tip": remote_tip}
 
 
@@ -283,12 +327,21 @@ class ProtocolHost:
     merge API. No arbitrary checkpoint mutation or command callback is exposed.
     """
 
-    def __init__(self, journal, *, collect, authority, merge):
+    def __init__(self, journal, *, collect, authority, merge, collect_recovery=None):
         require(
             all(callable(f) for f in (collect, authority, merge)),
             "Authenticated host capabilities required",
         )
         self.journal, self.collect, self.authority, self.merge = journal, collect, authority, merge
+        self.collect_recovery = collect_recovery or collect
+
+    def observation(self, request, identity):
+        collect = (
+            self.collect_recovery
+            if request["operation"] in {"ABANDON", "RECONCILE_NOT_APPLIED"}
+            else self.collect
+        )
+        return collect(identity)
 
     def explain(self, request):
         self.journal.synchronize()
@@ -296,7 +349,7 @@ class ProtocolHost:
         observation = (
             {}
             if request["operation_id"] in state["operations"]
-            else self.collect(state["identity"])
+            else self.observation(request, state["identity"])
         )
         return evaluate(state, request, observation, self.authority(state))
 
@@ -305,13 +358,16 @@ class ProtocolHost:
         state = self.journal.read()
         request = deepcopy(request)
         already_applied = request["operation_id"] in state["operations"]
-        observation = {} if already_applied else self.collect(state["identity"])
+        observation = {} if already_applied else self.observation(request, state["identity"])
         authority = self.authority(state)
         plan = evaluate(state, request, observation, authority)
 
         def refresh(current):
             return evaluate(
-                current, request, self.collect(current["identity"]), self.authority(current)
+                current,
+                request,
+                self.observation(request, current["identity"]),
+                self.authority(current),
             )
 
         written = self.journal.commit_plan(plan, refresh_and_plan=refresh)
@@ -593,7 +649,11 @@ class NativeGitHubHost:
         )
         self.collect_raw = collect_raw or self.native_collection
         self.host = ProtocolHost(
-            self.journal, collect=self.observe, authority=self.authority, merge=self.merge
+            self.journal,
+            collect=self.observe,
+            authority=self.authority,
+            merge=self.merge,
+            collect_recovery=lambda identity: self.observe(identity, recovery=True),
         )
 
     def load_profile(self):
@@ -707,7 +767,7 @@ class NativeGitHubHost:
             },
         }
 
-    def observe(self, identity):
+    def observe(self, identity, *, recovery=False):
         require(identity == self.identity, "Host identity changed")
         self.api.assert_account()
         self.check_effects(self.profile)
@@ -724,7 +784,24 @@ class NativeGitHubHost:
         authority = self.authority(state)
         merged = pr.get("merged") is True
         require(pr["state"] in {"open", "closed"}, "Unknown PR state")
-        reviews = verify_all_reviews(collection, self.profile)
+        require(
+            pr["head"]["sha"] == collection["head"]
+            and pr["base"]["repo"]["id"] == identity["repository_id"]
+            and pr["base"]["ref"] == collection["preflight"]["repo"]["response"]["default_branch"],
+            "Observed candidate/base identity changed",
+        )
+        if recovery:
+            require(not merged, "Recovery cannot reinterpret an actual merge")
+            reviews = {
+                "digest": digest(
+                    {
+                        "reviews": active["reviews"]["items"],
+                        "threads": active["threads"]["response"],
+                    }
+                )
+            }
+        else:
+            reviews = verify_all_reviews(collection, self.profile)
         coords = {
             "HEAD": collection["head"],
             "BASE": pr["base"]["sha"],
@@ -765,7 +842,7 @@ class NativeGitHubHost:
             "merge": None,
             "post_merge": None,
         }
-        if not merged and pr["state"] == "open":
+        if not recovery and not merged and pr["state"] == "open":
             scope = self.scope()
             checked = verify_protocol_candidate(
                 collection,
@@ -851,14 +928,17 @@ class NativeGitHubHost:
                     if checked["result"] == reviews["result"] == "PASS"
                     else "FAIL",
                     "complete": True,
-                    "evidence": [inventory, reviews],
+                    "evidence": [
+                        {k: v for k, v in inventory.items() if k != "observed_at"},
+                        reviews,
+                    ],
                 }
             else:
                 observation["post_merge"] = {
                     "head": actual["sha"],
                     "result": "NOT_RUN",
                     "complete": False,
-                    "evidence": [inventory],
+                    "evidence": [{k: v for k, v in inventory.items() if k != "observed_at"}],
                 }
         return observation
 

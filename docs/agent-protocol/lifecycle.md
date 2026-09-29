@@ -30,6 +30,12 @@ deterministic evidence still fails the anti-loop check. An uncertain dispatch
 stays INTEGRATING until an actual merge or a conclusive non-execution receipt is
 observed. No generic reset or user-supplied success override exists.
 
+The native recovery collector for RECONCILE_NOT_APPLIED and ABANDON still verifies
+the live repository, PR, branch, account and current head, but does not require the
+new candidate to qualify. Missing classification, forbidden changes or non-linear
+candidate history cannot prevent a conclusively authorized journal-only recovery.
+This route emits no qualification evidence and cannot integrate the candidate.
+
 INTERRUPT preserves owner and durable recovery material, invalidates qualification
 and records the reason. RESUME verifies restoration from durable material and
 keeps the same owner. HANDOFF requires an interrupted state, exact independent
@@ -38,7 +44,9 @@ material. It changes only the current owner; the original identity remains.
 The recipient subsequently resumes under their own accepted signing identity.
 ABANDON requires explicit scoped authority and retained material; it cannot conceal
 an uncertain integration. It accepts an open or closed unmerged PR and preserves
-the last candidate identity. Terminal journals cannot be reopened or reset.
+both the retained head and the freshly observed head in its exact grant and event.
+A head change before closure cannot prevent authorized abandonment; no earlier
+event is rewritten. Terminal journals cannot be reopened or reset.
 
 Before every write the host rereads the journal, reobserves external preconditions
 and evaluates the same request. The signed event records its expected predecessor
