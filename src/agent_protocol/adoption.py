@@ -38,9 +38,17 @@ def plan(
     )
     prefix = safe_path(profile["prefix"])
     require(
-        prefix.startswith(".github/agent-protocol/") and profile["entrypoints"],
-        "Accepted canonical vendor location and native entrypoints required",
+        not {part.casefold() for part in prefix.split("/")} & {".git", ".agent"}
+        and isinstance(profile["entrypoints"], list)
+        and profile["entrypoints"],
+        "Accepted durable vendor location and native entrypoints required",
     )
+    for entrypoint in profile["entrypoints"]:
+        entrypoint = safe_path(entrypoint).casefold()
+        require(
+            entrypoint != prefix.casefold() and not entrypoint.startswith(prefix.casefold() + "/"),
+            "Native adapter cannot overlap the canonical vendor package",
+        )
     source_root, target_root = Path(source_root).resolve(), Path(target_root).resolve()
     rows, paths = [], set()
     for record in manifest["files"]:

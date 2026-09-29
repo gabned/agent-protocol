@@ -43,6 +43,55 @@ class AdoptionTests(unittest.TestCase):
                 plan(source, target, manifest, profile, **args)
             self.assertEqual(copied.read_bytes(), b"unmanaged work")
 
+    def test_native_vendor_location_requires_independent_profile_acceptance(self):
+        content, manifest = fixture()
+        profile = {
+            "schema": "agent-protocol-adapter/v2",
+            "repository": "example/consumer",
+            "repository_id": 17,
+            "source_repository": "gabned/agent-protocol",
+            "prefix": "tools/agent_protocol_core",
+            "entrypoints": ["tools/agent-protocol"],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, target = root / "source", root / "consumer"
+            file = source / "src/example.py"
+            file.parent.mkdir(parents=True)
+            file.write_bytes(content)
+            args = {
+                "accepted_manifest_digest": digest(manifest),
+                "accepted_profile_digest": digest(profile),
+                "previous_files": {},
+            }
+            result = plan(source, target, manifest, profile, **args)
+            self.assertEqual(
+                result["files"][0]["destination"],
+                "tools/agent_protocol_core/src/example.py",
+            )
+            changed = {**profile, "prefix": "scripts/agent/core"}
+            with self.assertRaisesRegex(ValueError, "profile not accepted"):
+                plan(source, target, manifest, changed, **args)
+            for prefix in (".GIT/objects", ".agent/core", "../escape"):
+                changed = {**profile, "prefix": prefix}
+                with self.assertRaises(ValueError):
+                    plan(
+                        source,
+                        target,
+                        manifest,
+                        changed,
+                        **{**args, "accepted_profile_digest": digest(changed)},
+                    )
+            changed = {**profile, "entrypoints": ["TOOLS/AGENT_PROTOCOL_CORE/wrapper"]}
+            with self.assertRaisesRegex(ValueError, "overlap"):
+                plan(
+                    source,
+                    target,
+                    manifest,
+                    changed,
+                    **{**args, "accepted_profile_digest": digest(changed)},
+                )
+
     def test_cache_is_not_a_second_lifecycle_and_owner_is_not_assumed(self):
         value = {
             "schema": "synthetic-legacy/v1",

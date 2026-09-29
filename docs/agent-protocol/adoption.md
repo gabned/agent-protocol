@@ -5,6 +5,10 @@ through the accepted predecessor/local change-control. Verify canonical bytes,
 Git/archive modes and source identity. Consumer copies are byte-identical vendor
 dependencies; modify native adapters outside them. Do not create a local Core fork
 or replace the product's own Core. Wrapper locations follow the native runtime.
+The independently accepted local adapter profile selects the exact vendor directory;
+the planner does not impose a metadata directory on every runtime. Git internals,
+temporary caches and overlapping native wrappers are refused. A candidate cannot
+change that directory by supplying a replacement profile with a recomputed digest.
 
 Adoption requires the actual native entrypoints, collector, PR event guard,
 qualifier and CI to exercise the same accepted engine and policy. Update operational
