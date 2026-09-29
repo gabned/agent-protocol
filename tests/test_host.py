@@ -41,6 +41,33 @@ class SignedJournalTests(unittest.TestCase):
         pr["head"].update(ref=IDENTITY["branch"], repo={"id": 17})
         pr["base"].update(ref="main", repo={"id": 17, "full_name": IDENTITY["repository"]})
         pr["merge_commit_sha"] = "e" * 40
+        pr["comments"] = 1
+
+        def provider_summary(head):
+            return (
+                '<!-- codex-pull-request-review-summary -->\n'
+                f'| **Code Review** | **Completed** | `{head[:7]}` | Manual |\n'
+                f'| **Security Review** | **Completed** | `{head[:7]}` | Manual |\n'
+                '<!-- codex-security-review:v1 ' + json.dumps({
+                    'headSha': head, 'repository': IDENTITY['repository'],
+                    'pullRequestNumber': 4, 'status': 'completed',
+                }) + ' -->'
+            )
+
+        collection["issueComments"] = [
+            {"id": 9, "user": {"id": 123, "type": "Bot"}, "body": provider_summary("a" * 40)}
+        ]
+        collection["reviewReferences"] = [{
+            "url": f"https://api.github.com/repos/{IDENTITY['repository']}/commits/aaaaaaa",
+            "status": "OBSERVED", "observed_at": stamp, "response": {"sha": "a" * 40},
+        }]
+        collection["reviewViewer"] = {
+            "url": "https://api.github.com/user", "status": "OBSERVED", "observed_at": stamp,
+            "response": {"id": 19, "login": "reviewer"},
+        }
+        collection["preflight"]["active_pull_request"]["reviews"]["items"] = [
+            {"id": 1, "user": {"login": "reviewer"}, "state": "APPROVED", "commit_id": "a" * 40}
+        ]
         authority["policy"]["required_gates"] = [
             "CI",
             "NATIVE",
@@ -56,8 +83,11 @@ class SignedJournalTests(unittest.TestCase):
             "repository_id": 17,
             "paths": scope["paths"],
             "frozen_paths": [],
-            "reviewers": [],
-            "review_activity": [],
+            "reviewers": ["reviewer"],
+            "review_activity": [
+                {"provider": "CODEX_SUMMARY_V1", "author_id": 123, "kind": kind}
+                for kind in ("CODE", "SECURITY")
+            ],
             "required_workflows": scope["ci"]["required_workflows"],
             "post_merge_workflows": [".github/workflows/ci.yml@push"],
             "runtime": {"python": "synthetic-runtime"},
@@ -246,17 +276,12 @@ class SignedJournalTests(unittest.TestCase):
         # The real post-merge native collector may run in different seconds.
         collection["head"] = pr["head"]["sha"] = "9" * 40
         pr.update(merged=True, state="closed", body=original_body)
-        profile["reviewers"] = ["reviewer"]
-        native.profile["reviewers"] = ["reviewer"]
-        collection["reviewViewer"] = {
-            "url": "https://api.github.com/user",
-            "status": "OBSERVED",
-            "observed_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "response": {"id": 19, "login": "reviewer"},
-        }
-        collection["preflight"]["active_pull_request"]["reviews"]["items"] = [
-            {"id": 1, "user": {"login": "reviewer"}, "state": "APPROVED", "commit_id": "a" * 40}
-        ]
+        collection["issueComments"][0]["body"] = provider_summary("9" * 40)
+        collection["reviewReferences"] = []  # Old mutable provider summary is no longer available.
+        collection["preflight"]["active_pull_request"]["reviews"]["items"].append(
+            {"id": 2, "user": {"login": "reviewer"},
+             "state": "CHANGES_REQUESTED", "commit_id": "9" * 40}
+        )
         collection["postMerge"] = copy.deepcopy(collection["ci"])
         post = collection["postMerge"]
         post["head_sha"] = "e" * 40
@@ -303,10 +328,15 @@ class SignedJournalTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "reconciled merge identity"):
             evaluate(state, request, wrong_merge, authority)
         reviews = collection["preflight"]["active_pull_request"]["reviews"]["items"]
-        reviews[0]["commit_id"] = "8" * 40
+        reviews[0]["state"] = "CHANGES_REQUESTED"
         with self.assertRaisesRegex(ValueError, "Post-merge delivery"):
             evaluate(state, request, native.observe(IDENTITY), authority)
-        reviews[0]["commit_id"] = "a" * 40
+        reviews[0]["state"] = "APPROVED"
+        retained_gate = state["qualification"]["evidence"][2]
+        self.assertEqual(retained_gate["gate"], "REVIEWS")
+        self.assertEqual(
+            {row["head"] for row in retained_gate["source"]["activity"]["evidence"]}, {"a" * 40}
+        )
         post["histories"][0]["jobs"][0]["response"]["jobs"][0]["conclusion"] = "failure"
         post["histories"][0]["attempt"]["response"]["conclusion"] = "failure"
         post["inventory"][0]["response"]["workflow_runs"][0]["conclusion"] = "failure"

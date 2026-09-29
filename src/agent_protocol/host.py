@@ -20,7 +20,13 @@ from urllib.parse import quote, unquote
 
 from .ledger import canonical, digest, exact, replay, require, sha, validate_identity
 from .lifecycle import DEPENDENCIES, evaluate
-from .qualification import ci_evidence, normalize_ci, verify_all_reviews, verify_protocol_candidate
+from .qualification import (
+    ci_evidence,
+    normalize_ci,
+    verify_all_reviews,
+    verify_protocol_candidate,
+    verify_settlement_reviews,
+)
 from .source import ROOT, safe_path, verify_installation
 
 
@@ -758,8 +764,10 @@ class NativeGitHubHost:
         else:
             # A source branch may advance after merge. Reviews settle the retained
             # qualified candidate, while the observation keeps the live PR head.
-            reviews = verify_all_reviews(
-                collection, self.profile, review_head=state["head"] if merged else None
+            reviews = (
+                verify_settlement_reviews(collection, state)
+                if merged
+                else verify_all_reviews(collection, self.profile)
             )
         coords = {
             "HEAD": collection["head"],

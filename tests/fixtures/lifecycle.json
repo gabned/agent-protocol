@@ -38,16 +38,16 @@
     },
     "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "coordinates": {
+      "AUTHORITY": "3630c0c3c28b26246680a20185caa7b138865a7d984b6dd823b1c8d52c457cbe",
+      "HEAD": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "PR_STATE": "OPEN",
+      "POLICY": "f75d1e9a64cdb220bd181daeb5624986d4d82d4d417b69d7686982ba27aabda1",
+      "BASE": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "MASTER": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "REVIEWS": "synthetic",
       "REPOSITORY": "38f0ab8fac443ba9ad93f5723d8bab3bad07170f84dedb188c41cd88b221066c",
-      "MASTER": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "AUTHORITY": "3630c0c3c28b26246680a20185caa7b138865a7d984b6dd823b1c8d52c457cbe",
-      "BASE": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "HEAD": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "PIN": "dddddddddddddddddddddddddddddddddddddddd",
-      "POLICY": "f75d1e9a64cdb220bd181daeb5624986d4d82d4d417b69d7686982ba27aabda1",
-      "RUNTIME": "synthetic",
-      "PR_STATE": "OPEN"
+      "RUNTIME": "synthetic"
     },
     "observed_at": "2026-01-01T00:00:00Z",
     "effects": "NO_PRODUCTION",
@@ -62,10 +62,10 @@
           "RUNTIME"
         ],
         "coordinates": {
-          "RUNTIME": "synthetic",
-          "BASE": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "REPOSITORY": "38f0ab8fac443ba9ad93f5723d8bab3bad07170f84dedb188c41cd88b221066c",
-          "HEAD": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          "RUNTIME": "synthetic",
+          "HEAD": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "BASE": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         },
         "result": "PASS",
         "source": "authenticated:synthetic"
@@ -80,10 +80,10 @@
           "REPOSITORY"
         ],
         "coordinates": {
-          "BASE": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          "REPOSITORY": "38f0ab8fac443ba9ad93f5723d8bab3bad07170f84dedb188c41cd88b221066c",
           "POLICY": "f75d1e9a64cdb220bd181daeb5624986d4d82d4d417b69d7686982ba27aabda1",
-          "HEAD": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          "HEAD": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "BASE": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "REPOSITORY": "38f0ab8fac443ba9ad93f5723d8bab3bad07170f84dedb188c41cd88b221066c"
         },
         "result": "PASS",
         "source": "authenticated:synthetic"

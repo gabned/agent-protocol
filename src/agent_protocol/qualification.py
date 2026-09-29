@@ -149,6 +149,7 @@ def normalize_ci(history, *, accepted_policy, observed_at):
 def verify_reviews(collection, *, required_reviewers, now=None, review_head=None):
     """Thread completeness is cross-checked against actual REST comment identities."""
     now = now or datetime.now(UTC)
+    settling_head = review_head
     review_head = review_head or collection["head"]
     active = collection["preflight"]["active_pull_request"]
     pr = active["pr"]["response"]
@@ -177,6 +178,8 @@ def verify_reviews(collection, *, required_reviewers, now=None, review_head=None
         "Duplicated review records",
     )
     for review in active["reviews"]["items"]:
+        if settling_head is not None and review["commit_id"] != settling_head:
+            continue
         if review["state"] not in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}:
             continue
         author = review["user"]["login"]
@@ -222,6 +225,33 @@ def verify_reviews(collection, *, required_reviewers, now=None, review_head=None
             }
         ),
     }
+
+
+def verify_settlement_reviews(collection, state, *, now=None):
+    """Preserve signed qualification; observe current threads and original-head findings.
+
+    New source-head reviews and editable provider summaries cannot erase the
+    accepted candidate's retained evidence. This is never a qualification route.
+    """
+    qualification = state["qualification"]
+    require(
+        state["status"] in {"INTEGRATING", "INTEGRATED", "CLOSED"}
+        and qualification is not None
+        and qualification["result"] == "PASS"
+        and qualification["coordinates"] == state["coordinates"],
+        "Settlement requires retained exact qualification",
+    )
+    retained = [g for g in qualification["evidence"] if g["gate"] == "REVIEWS"]
+    require(
+        len(retained) == 1
+        and retained[0]["result"] == "PASS"
+        and retained[0]["coordinates"]["HEAD"] == state["head"]
+        and retained[0]["coordinates"]["REVIEWS"] == state["coordinates"]["REVIEWS"],
+        "Retained review evidence does not bind the merged candidate",
+    )
+    current = verify_reviews(collection, required_reviewers=[], now=now, review_head=state["head"])
+    evidence = {"retained": retained[0], "current": current}
+    return {**current, "digest": digest(evidence), "activity": evidence}
 
 
 def verify_review_activity(collection, requirements, *, now=None, review_head=None):

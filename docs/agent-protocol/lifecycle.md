@@ -22,6 +22,12 @@ retained qualified head, its qualification or integration intent. Merge parents,
 tree and reviews still bind that retained candidate; post-merge checks bind the
 actual merge commit. CLOSE reobserves the same reconciled merge identity. New
 source commits receive no qualification or integration authority from settlement.
+Settlement uses the original successful review gate retained in the signed journal,
+including its complete provider evidence. A newer review or updated provider summary
+for a later source head cannot replace that historical proof. Fresh complete thread
+and review inventories still reject unresolved threads and changes requested on the
+integrated candidate. Historical qualification is never rerun against mutable PR
+prose, relabeled or used to qualify the newer head.
 
 RECONCILE_NOT_APPLIED settles an integration intent only with an independently
 authenticated NOT_DISPATCHED or DEFINITIVELY_REJECTED receipt. The receipt names
