@@ -516,6 +516,12 @@ class SignedJournalTests(unittest.TestCase):
         self.assertEqual(len(calls), before)
 
     def test_typed_host_never_repeats_uncertain_merge_and_closes_idempotently(self):
+        self.exercise_typed_host(race=False)
+
+    def test_typed_host_reconciles_concurrent_intent_without_duplicate_merge(self):
+        self.exercise_typed_host(race=True)
+
+    def exercise_typed_host(self, *, race):
         with tempfile.TemporaryDirectory(prefix="protocol-host-") as temporary:
             root = Path(temporary)
             key, directory, remote = root / "key", root / "host", root / "remote.git"
@@ -579,8 +585,31 @@ class SignedJournalTests(unittest.TestCase):
                 operation_id="operation-integrate",
                 expected_tip=journal.tip(),
             )
-            with self.assertRaisesRegex(ValueError, "outcome uncertain"):
-                host.operate(request)
+            # The second process wins the real local ref CAS while this host is
+            # appending the same signed intent. Its observed operation was new,
+            # but commit_plan must reconcile the winning append without dispatch.
+            original_git = journal.git
+            won = []
+
+            def win_before_cas(*args, **kwargs):
+                if args[0] == "update-ref" and args[1] == journal.ref and not won:
+                    won.append(args[2])
+                    original_git(*args, **kwargs)
+                return original_git(*args, **kwargs)
+
+            if race:
+                journal.git = win_before_cas
+                self.assertEqual(host.operate(request)["state"], "RECONCILIATION_REQUIRED")
+                journal.git = original_git
+                self.assertEqual(len(won), 1)
+                self.assertEqual(merge_calls, [])
+                # The winning process can already have sent the effect and lost its
+                # response. Retrying from either process still cannot send it again.
+                with self.assertRaises(ConnectionError):
+                    merge(method="merge", expected_head="a" * 40, expected_base="b" * 40)
+            else:
+                with self.assertRaisesRegex(ValueError, "outcome uncertain"):
+                    host.operate(request)
             self.assertEqual(journal.read()["status"], "INTEGRATING")
             self.assertEqual(host.operate(request)["state"], "RECONCILIATION_REQUIRED")
             self.assertEqual(len(merge_calls), 1)

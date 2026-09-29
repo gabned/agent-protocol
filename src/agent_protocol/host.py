@@ -382,7 +382,7 @@ class ProtocolHost:
             return {"operation": request["operation"], "write": written, "journal": durable}
         # An existing intent may represent a successful, failed or uncertain API
         # call. Never issue that write again merely because the client retried.
-        if already_applied:
+        if already_applied or written["state"] != "APPLIED_LOCAL":
             return {
                 "operation": "INTEGRATE",
                 "journal": durable,
