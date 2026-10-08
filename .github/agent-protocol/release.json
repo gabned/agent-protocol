@@ -1,6 +1,6 @@
 {
   "schema": "agent-protocol-release/v1",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "repository": "gabned/agent-protocol",
   "repository_id": 1393711644,
   "revision_binding": "AUTHENTICATED_TAG_AND_EXTERNAL_ARTIFACT_MANIFEST",
