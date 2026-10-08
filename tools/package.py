@@ -21,8 +21,8 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DIST = "agent_protocol_core-1.5.0.dist-info"
-NAME = "agent_protocol_core-1.5.0-py3-none-any.whl"
+DIST = "agent_protocol_core-1.5.1.dist-info"
+NAME = "agent_protocol_core-1.5.1-py3-none-any.whl"
 
 
 def committed_files(root, revision):
@@ -67,7 +67,7 @@ def source_manifest(files, revision):
         "repository": "gabned/agent-protocol",
         "repository_id": 1393711644,
         "revision": revision,
-        "version": "1.5.0",
+        "version": "1.5.1",
         "files": [
             {"path": p, "mode": m, "blob": b, "sha256": hashlib.sha256(d).hexdigest()}
             for p, (m, d, b) in sorted(files.items())
@@ -83,7 +83,7 @@ def restored_files(root):
     """
     root = Path(root).resolve()
     manifest = json.loads((root / "SOURCE-MANIFEST.json").read_text(encoding="utf-8"))
-    if manifest.get("schema") != "agent-protocol-source/v1" or manifest.get("version") != "1.5.0":
+    if manifest.get("schema") != "agent-protocol-source/v1" or manifest.get("version") != "1.5.1":
         raise ValueError("Unknown source artifact")
     files = {}
     for row in manifest["files"]:
@@ -124,7 +124,7 @@ def wheel_bytes(files):
         if name in {"LICENSE", "COMMERCIAL-LICENSE.md", "THIRD_PARTY_NOTICES.md"}:
             members[DIST + "/licenses/" + name] = (mode, data)
     metadata = (
-        "Metadata-Version: 2.3\nName: agent-protocol-core\nVersion: 1.5.0\n"
+        "Metadata-Version: 2.3\nName: agent-protocol-core\nVersion: 1.5.1\n"
         "Summary: Independent Agent Protocol Core\nRequires-Python: >=3.12\n\n"
         "Original LICENSE, COMMERCIAL-LICENSE.md and THIRD_PARTY_NOTICES.md apply.\n"
     )
@@ -165,7 +165,7 @@ def source_bytes(files, revision=None):
         tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as archive,
     ):
         for path, (mode, data, _blob) in sorted(files.items()):
-            member = tarfile.TarInfo("agent-protocol-1.5.0/" + path)
+            member = tarfile.TarInfo("agent-protocol-1.5.1/" + path)
             member.size, member.mode, member.mtime = len(data), int(mode, 8) & 0o777, 0
             archive.addfile(member, io.BytesIO(data))
     return output.getvalue()
@@ -196,7 +196,7 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
 
 
 def build_sdist(sdist_directory, config_settings=None):
-    name = "agent_protocol_core-1.5.0.tar.gz"
+    name = "agent_protocol_core-1.5.1.tar.gz"
     files, revision = build_inputs()
     (Path(sdist_directory) / name).write_bytes(source_bytes(files, revision))
     return name
@@ -214,7 +214,7 @@ def main(argv=None):
         "repository": "gabned/agent-protocol",
         "repository_id": 1393711644,
         "revision": args.revision,
-        "version": "1.5.0",
+        "version": "1.5.1",
         "files": [
             {"path": p, "mode": m, "blob": b, "sha256": hashlib.sha256(d).hexdigest()}
             for p, (m, d, b) in sorted(files.items())

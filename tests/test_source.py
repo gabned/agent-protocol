@@ -19,7 +19,7 @@ def fixture():
         "repository": "gabned/agent-protocol",
         "repository_id": 1393711644,
         "revision": "a" * 40,
-        "version": "1.5.0",
+        "version": "1.5.1",
         "files": [
             {
                 "path": "src/example.py",

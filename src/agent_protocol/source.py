@@ -57,7 +57,7 @@ def validate_inventory(manifest, expected_digest):
         and manifest["repository_id"] == 1393711644,
         "Canonical source identity changed",
     )
-    require(manifest["version"] == "1.5.0", "Unsupported current distribution identity")
+    require(manifest["version"] == "1.5.1", "Unsupported current distribution identity")
     require(isinstance(manifest["files"], list) and manifest["files"], "Empty source inventory")
     folded, names = set(), set()
     for row in manifest["files"]:
@@ -107,7 +107,7 @@ def git_inventory(repository, revision):
         "repository": "gabned/agent-protocol",
         "repository_id": 1393711644,
         "revision": revision,
-        "version": "1.5.0",
+        "version": "1.5.1",
         "files": rows,
     }
     return validate_inventory(manifest, hashlib.sha256(canonical(manifest)).hexdigest())
