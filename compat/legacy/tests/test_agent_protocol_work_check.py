@@ -360,10 +360,15 @@ class WindowsShardContractTests(unittest.TestCase):
                     with (
                         patch.object(runner.sys, "platform", "win32"),
                         patch.object(runner.sys, "stdout", console),
+                        # A repeated clock tick can make deadline - now round above
+                        # 540, even though no time has elapsed. Exercise every wait.
+                        patch.object(runner.time, "monotonic", return_value=1023.9),
                         patch.object(runner, "windows_identity", return_value=identity),
                         patch.object(runner.subprocess, "Popen", side_effect=launch),
+                        patch.object(runner.subprocess, "run") as cleanup,
                     ):
                         code = runner.run_windows_group(root, output, expected, group)
+                    cleanup.assert_not_called()
                     console.flush()
                     replay = buffer.getvalue().decode("cp1252")
                     console.close()

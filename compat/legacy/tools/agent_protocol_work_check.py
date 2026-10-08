@@ -429,7 +429,8 @@ def run_windows_group(root, output, expected, group):
     inventory_path = output / f"inventory-{group}.json"
     try:
         inventory_process = start("inventory", None, inventory_path)
-        inventory_process.wait(timeout=max(0.01, deadline - time.monotonic()))
+        inventory_process.wait(timeout=min(WINDOWS_CI_TIMEOUT,
+                                           max(0.01, deadline - time.monotonic())))
         source.require(inventory_process.returncode == 0, "independent Windows collection failed")
         inventory = source.read_json(inventory_path)
         for index in (group * 2, group * 2 + 1):
@@ -440,7 +441,8 @@ def run_windows_group(root, output, expected, group):
             reports.append(report)
             start("shard", index, report)
         for process in processes[1:]:
-            process.wait(timeout=max(0.01, deadline - time.monotonic()))
+            process.wait(timeout=min(WINDOWS_CI_TIMEOUT,
+                                     max(0.01, deadline - time.monotonic())))
     except subprocess.TimeoutExpired:
         timed_out = True
     except (source.EvidenceError, OSError, ValueError) as error:
