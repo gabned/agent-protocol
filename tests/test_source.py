@@ -117,6 +117,76 @@ def git_fixture():
 
 
 class GitSourceTests(unittest.TestCase):
+    def test_online_acceptance_requires_canonical_owner_merge_gates_and_default_ancestry(self):
+        import json
+
+        from agent_protocol.source import authenticate_git_origin
+
+        _content, _manifest, proof = git_fixture()
+        origin = copy.deepcopy(proof["origin"])
+        acceptance = {
+            "schema": "agent-protocol-source-acceptance/v1",
+            **{
+                k: origin[k]
+                for k in ("repository", "repository_id", "revision", "tree", "base", "head")
+            },
+            "pull_request": 1,
+            "gates": dict.fromkeys(
+                ("predecessor_scope", "linux", "windows", "reviews", "post_merge"), "PASS"
+            ),
+        }
+        body = "Independent source acceptance\n\n```json\n" + json.dumps(acceptance) + "\n```"
+        origin["acceptance"]["receipt_sha256"] = hashlib.sha256(body.encode()).hexdigest()
+        api = "https://api.github.com/repos/gabned/agent-protocol"
+        observations = {
+            api: {
+                "id": 1393711644,
+                "full_name": "gabned/agent-protocol",
+                "owner": {"id": 42},
+                "default_branch": "main",
+            },
+            api + "/pulls/1": {
+                "number": 1,
+                "merged": True,
+                "merge_commit_sha": origin["revision"],
+                "head": {"sha": origin["head"], "repo": {"id": 1393711644}},
+                "base": {"repo": {"id": 1393711644}},
+            },
+            api + "/git/commits/" + origin["revision"]: {
+                "sha": origin["revision"],
+                "tree": {"sha": origin["tree"]},
+                "parents": [{"sha": origin["base"]}, {"sha": origin["head"]}],
+            },
+            api + "/issues/comments/1": {
+                "body": body,
+                "html_url": origin["acceptance"]["receipt_url"],
+                "issue_url": api + "/issues/1",
+                "author_association": "OWNER",
+                "user": {"id": 42},
+            },
+            api + "/compare/" + origin["revision"] + "...main": {
+                "status": "identical",
+                "merge_base_commit": {"sha": origin["revision"]},
+            },
+        }
+        self.assertEqual(
+            authenticate_git_origin(origin, fetch_json=observations.__getitem__), origin
+        )
+        for attack in ("repository", "unmerged", "owner", "receipt", "ancestry"):
+            data = copy.deepcopy(observations)
+            if attack == "repository":
+                data[api]["id"] += 1
+            elif attack == "unmerged":
+                data[api + "/pulls/1"]["merged"] = False
+            elif attack == "owner":
+                data[api + "/issues/comments/1"]["user"]["id"] += 1
+            elif attack == "receipt":
+                data[api + "/issues/comments/1"]["body"] += "altered"
+            else:
+                data[api + "/compare/" + origin["revision"] + "...main"]["status"] = "diverged"
+            with self.subTest(attack=attack), self.assertRaises(ValueError):
+                authenticate_git_origin(origin, fetch_json=data.__getitem__)
+
     def test_malformed_source_and_host_enrollment_fail_before_host_effects(self):
         from agent_protocol.host import NativeGitHubHost
         from agent_protocol.source import verify_installation

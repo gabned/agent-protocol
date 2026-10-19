@@ -469,3 +469,77 @@ def acquire_git_source(repository, directory, origin, *, authenticate_origin):
         "manifest_digest": hashlib.sha256(canonical(manifest)).hexdigest(),
         "provenance": proof,
     }
+
+
+def authenticate_git_origin(origin, *, fetch_json):
+    """Authenticate an enrolled acceptance against independent canonical host reads.
+
+    fetch_json is the host's authenticated read capability (native HTTPS/CLI or
+    Work connector). Candidate JSON cannot install this capability or author an
+    OWNER acceptance in the canonical repository.
+    """
+    validate_git_origin(origin)
+    require(callable(fetch_json), "Authenticated canonical read capability required")
+    api = "https://api.github.com/repos/gabned/agent-protocol"
+    repository = fetch_json(api)
+    require(
+        repository["id"] == origin["repository_id"]
+        and repository["full_name"] == origin["repository"],
+        "Authenticated canonical repository differs",
+    )
+    number = origin["acceptance"]["pull_request"]
+    pr = fetch_json(f"{api}/pulls/{number}")
+    require(
+        pr["number"] == number
+        and pr["merged"] is True
+        and pr["merge_commit_sha"] == origin["revision"]
+        and pr["head"]["sha"] == origin["head"]
+        and pr["head"]["repo"]["id"] == repository["id"]
+        and pr["base"]["repo"]["id"] == repository["id"],
+        "Canonical source has not been independently merged",
+    )
+    commit = fetch_json(f"{api}/git/commits/{origin['revision']}")
+    require(
+        commit["sha"] == origin["revision"]
+        and commit["tree"]["sha"] == origin["tree"]
+        and [p["sha"] for p in commit["parents"]] == [origin["base"], origin["head"]],
+        "Authenticated canonical commit/tree/parents differ",
+    )
+    comment_id = origin["acceptance"]["receipt_url"].rsplit("-", 1)[-1]
+    receipt = fetch_json(f"{api}/issues/comments/{comment_id}")
+    body = receipt["body"]
+    require(
+        receipt["html_url"] == origin["acceptance"]["receipt_url"]
+        and receipt["issue_url"] == f"{api}/issues/{number}"
+        and receipt["author_association"] == "OWNER"
+        and receipt["user"]["id"] == repository["owner"]["id"]
+        and hashlib.sha256(body.encode()).hexdigest() == origin["acceptance"]["receipt_sha256"],
+        "Original independent OWNER acceptance differs",
+    )
+    blocks = re.findall(r"```json\n(.*?)\n```", body, re.DOTALL)
+    require(len(blocks) == 1, "Unambiguous versioned source acceptance required")
+    acceptance = json.loads(blocks[0])
+    exact(
+        acceptance,
+        "schema repository repository_id revision tree base head pull_request gates",
+        "independent source acceptance",
+    )
+    require(
+        acceptance["schema"] == "agent-protocol-source-acceptance/v1"
+        and all(
+            acceptance[k] == origin[k]
+            for k in ("repository", "repository_id", "revision", "tree", "base", "head")
+        )
+        and acceptance["pull_request"] == number,
+        "Independent acceptance selects another source",
+    )
+    gates = acceptance["gates"]
+    exact(gates, "predecessor_scope linux windows reviews post_merge", "source acceptance gates")
+    require(all(value == "PASS" for value in gates.values()), "Source acceptance is incomplete")
+    ancestry = fetch_json(f"{api}/compare/{origin['revision']}...{repository['default_branch']}")
+    require(
+        ancestry["status"] in {"identical", "ahead"}
+        and ancestry["merge_base_commit"]["sha"] == origin["revision"],
+        "Accepted source is outside canonical default ancestry",
+    )
+    return origin

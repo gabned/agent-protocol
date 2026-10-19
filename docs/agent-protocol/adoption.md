@@ -95,3 +95,14 @@ operational and Work pins agree and qualify native entrypoints, event guards,
 online acquisition, repeat acquisition, offline checks and all supported platforms.
 A changed pin, cache or vendor tree does not complete rollout. Each repository
 retains its owner, PRODUCT policy and actual acceptance/readback evidence.
+
+Online adapters use the shared `authenticate_git_origin` with their authenticated
+read capability. It checks canonical numeric identity, actual merged PR/head,
+ordered commit parents/tree, original OWNER receipt and default ancestry. New
+machine-readable source acceptance uses `agent-protocol-source-acceptance/v1`
+in the independent canonical OWNER receipt after predecessor, Linux, Windows,
+review and post-merge gates pass. The receipt is external to the accepted source,
+so it does not contain its own URL/digest. Historical receipts keep their original
+validators and are not reinterpreted as this schema. Fresh online authentication
+is retained separately; offline verification uses the previously independently
+accepted consumer pin or enrollment, never an unaccepted candidate assertion.
