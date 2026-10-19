@@ -57,3 +57,22 @@ Platform-specific behavior needs its native lane. Manual validation is reserved
 for a concrete non-reproducible requirement and needs a private preview, minimal
 scenario and expected result. Unperformed work remains NOT_RUN or authorized
 DEFERRED. Linux evidence cannot certify native Windows behavior.
+
+## Dependencies beyond the runtime SBOM
+
+For source adoption and publication, inventory pertinent runtime, development/test,
+build/release, canonical vendor, platform lock, container and native tool inputs.
+Compare declared requirements, actual resolutions/installations, locks, generated
+SBOM and existing automated proposals. A runtime-only SBOM is not a complete
+dependency security inventory. Preserve intentional isolated historical inputs
+and evaluate their actual execution context separately from current requirements.
+
+For each suspected case retain component, declared/resolved version, manifest,
+scope, official advisory and affected/fixed range, observed applicability
+(APPLICABLE, NOT_APPLICABLE with reason, or TO_VERIFY) and the minimum action.
+Unknown protected scanner/API state remains unobserved; partial scans cannot
+support an aggregate clean verdict. Avoid generalized updates. Canonical vendor
+defects are fixed and accepted upstream; consumer adapter and PRODUCT defects
+have separate homogeneous owners. A fix at root cannot stand in for a relevant
+unfixed vendor/tool surface. Requalify changed dependency/validator coordinates
+without transferring an earlier PASS or rewriting historical receipts.

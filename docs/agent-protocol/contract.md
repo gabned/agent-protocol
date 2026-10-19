@@ -1,6 +1,6 @@
 # Current Agent Protocol contract
 
-This topic contract governs only an independently accepted distribution. A
+This topic contract governs only independently accepted canonical source or an independently accepted published distribution. A
 candidate is not its own authority. The host first authenticates the repository,
 accepted source revision, local policy, exact scope and current workstream owner.
 Then it verifies package bytes/modes and selects documents by phase and host.
