@@ -568,6 +568,7 @@ class NativeGitHubHost:
     """
 
     def __init__(self, enrollment, *, api=None, collect_raw=None):
+        require(isinstance(enrollment, dict), "Host enrollment must be an object")
         schema = enrollment.get("schema")
         require(
             schema in {"agent-host-enrollment/v1", "agent-host-enrollment/v2"},
@@ -583,7 +584,8 @@ class NativeGitHubHost:
         )
         if git_source:
             require(
-                enrollment["source_bundle"].get("schema") == "agent-protocol-source-bundle/v2",
+                isinstance(enrollment["source_bundle"], dict)
+                and enrollment["source_bundle"].get("schema") == "agent-protocol-source-bundle/v2",
                 "Git enrollment requires explicit Git source bundle",
             )
         self.binding = deepcopy(enrollment)

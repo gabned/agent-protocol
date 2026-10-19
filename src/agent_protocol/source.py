@@ -151,6 +151,7 @@ def verify_installation(
     Enrollment selects the original release digest. No candidate-supplied hash
     grants authority. Archive mode validation works on Windows and POSIX alike.
     """
+    require(isinstance(bundle, dict), "Source bundle must be an object")
     if bundle.get("schema") == "agent-protocol-source-bundle/v2":
         exact(
             bundle,

@@ -117,6 +117,16 @@ def git_fixture():
 
 
 class GitSourceTests(unittest.TestCase):
+    def test_malformed_source_and_host_enrollment_fail_before_host_effects(self):
+        from agent_protocol.host import NativeGitHubHost
+        from agent_protocol.source import verify_installation
+
+        for malformed in (None, [], "candidate-selected"):
+            with self.subTest(value=malformed), self.assertRaises(ValueError):
+                verify_installation(malformed, revision="a" * 40)
+            with self.subTest(value=malformed), self.assertRaises(ValueError):
+                NativeGitHubHost(malformed)
+
     def test_original_commit_graph_and_complete_tree_verify_without_git(self):
         from unittest.mock import patch
 
