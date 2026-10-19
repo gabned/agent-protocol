@@ -493,8 +493,6 @@ def authenticate_git_origin(origin, *, fetch_json):
         pr["number"] == number
         and pr["merged"] is True
         and pr["merge_commit_sha"] == origin["revision"]
-        and pr["head"]["sha"] == origin["head"]
-        and pr["head"]["repo"]["id"] == repository["id"]
         and pr["base"]["repo"]["id"] == repository["id"],
         "Canonical source has not been independently merged",
     )

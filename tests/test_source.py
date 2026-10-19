@@ -172,6 +172,13 @@ class GitSourceTests(unittest.TestCase):
         self.assertEqual(
             authenticate_git_origin(origin, fetch_json=observations.__getitem__), origin
         )
+        # A closed PR's live branch may advance or disappear. The authenticated
+        # merge parents and retained acceptance identify the reviewed source.
+        advanced = copy.deepcopy(observations)
+        advanced[api + "/pulls/1"]["head"] = {"sha": "f" * 40, "repo": None}
+        self.assertEqual(
+            authenticate_git_origin(origin, fetch_json=advanced.__getitem__), origin
+        )
         for attack in ("repository", "unmerged", "owner", "receipt", "ancestry"):
             data = copy.deepcopy(observations)
             if attack == "repository":
