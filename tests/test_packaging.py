@@ -10,9 +10,11 @@ import json
 import subprocess
 import tarfile
 import tempfile
+import tomllib
 import unittest
 import zipfile
 
+from agent_protocol import __version__
 from agent_protocol.ledger import digest
 from agent_protocol.source import verify_installation
 
@@ -23,6 +25,20 @@ spec.loader.exec_module(packaging)
 
 
 class PackagingTests(unittest.TestCase):
+    def test_release_descriptor_agrees_with_source_project_and_built_wheel(self):
+        release = json.loads((ROOT / ".github/agent-protocol/release.json").read_text())
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+        revision = packaging.current_revision()
+        files = packaging.committed_files(ROOT, revision)
+        manifest = packaging.source_manifest(files, revision)
+        self.assertEqual(release["version"], project["version"])
+        self.assertEqual(release["version"], __version__)
+        self.assertEqual(release["version"], manifest["version"])
+        with zipfile.ZipFile(io.BytesIO(packaging.wheel_bytes(files))) as archive:
+            metadata = archive.read(packaging.DIST + "/METADATA").decode()
+        self.assertEqual([line for line in metadata.splitlines() if line.startswith("Version: ")],
+                         ["Version: " + release["version"]])
+
     def test_real_pep517_source_build_and_isolated_install_without_network_or_git(self):
         registry = json.loads((ROOT / ".github/agent-protocol/bootstrap.json").read_text())
         files = {}
