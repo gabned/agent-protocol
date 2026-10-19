@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import importlib.util
 import json
@@ -142,12 +143,41 @@ def verify_files(root, manifest, *, expected_digest, observed_modes):
     }
 
 
-def verify_installation(bundle, *, revision, distribution_root=ROOT, source_root=None):
+def verify_installation(
+    bundle, *, revision, distribution_root=ROOT, source_root=None, authenticate_origin=None
+):
     """Compare installed bytes/modes to an independently authenticated release archive.
 
     Enrollment selects the original release digest. No candidate-supplied hash
     grants authority. Archive mode validation works on Windows and POSIX alike.
     """
+    require(isinstance(bundle, dict), "Source bundle must be an object")
+    if bundle.get("schema") == "agent-protocol-source-bundle/v2":
+        exact(
+            bundle,
+            "schema kind archive_path archive_sha256 manifest manifest_digest provenance",
+            "Git source bundle",
+        )
+        require(bundle["kind"] == "CANONICAL_GIT", "Unknown source acquisition kind")
+        checked = verify_git_provenance(
+            bundle["provenance"], bundle["manifest"], authenticate_origin=authenticate_origin
+        )
+        legacy_bundle = {
+            key: bundle[key]
+            for key in ("archive_path", "archive_sha256", "manifest", "manifest_digest")
+        }
+        result = verify_installation(
+            legacy_bundle,
+            revision=revision,
+            distribution_root=distribution_root,
+            source_root=source_root,
+        )
+        return {
+            **result,
+            "kind": "CANONICAL_GIT",
+            "tree": checked["tree"],
+            "origin_digest": checked["origin_digest"],
+        }
     exact(bundle, "archive_path archive_sha256 manifest manifest_digest", "enrolled source bundle")
     manifest = validate_inventory(bundle["manifest"], bundle["manifest_digest"])
     require(manifest["revision"] == sha(revision), "Installed source pin differs")
@@ -201,3 +231,313 @@ def verify_installation(bundle, *, revision, distribution_root=ROOT, source_root
         "archive_sha256": bundle["archive_sha256"],
         "files": len(expected),
     }
+
+
+def _git_tree(manifest):
+    """Reconstruct the complete Git root tree without Git or a network."""
+    root = {}
+    for row in manifest["files"]:
+        parts = row["path"].split("/")
+        node = root
+        for part in parts[:-1]:
+            require(part not in node or isinstance(node[part], dict), "File/directory collision")
+            node = node.setdefault(part, {})
+        require(parts[-1] not in node, "File/directory collision")
+        node[parts[-1]] = (row["mode"], row["blob"])
+
+    def tree(node):
+        records = []
+        for name, value in node.items():
+            directory = isinstance(value, dict)
+            mode, blob = ("40000", tree(value)) if directory else value
+            key = name.encode() + (b"/" if directory else b"")
+            records.append(
+                (key, mode.encode() + b" " + name.encode() + b"\0" + bytes.fromhex(blob))
+            )
+        data = b"".join(record for _, record in sorted(records))
+        return hashlib.sha1(b"tree " + str(len(data)).encode() + b"\0" + data).hexdigest()
+
+    return tree(root)
+
+
+def validate_git_origin(origin):
+    exact(
+        origin, "schema repository repository_id revision tree base head acceptance", "Git origin"
+    )
+    require(origin["schema"] == "agent-protocol-git-origin/v1", "Unknown Git origin")
+    require(
+        origin["repository"] == "gabned/agent-protocol" and origin["repository_id"] == 1393711644,
+        "Canonical Git repository identity changed",
+    )
+    for field in ("revision", "tree", "base", "head"):
+        sha(origin[field])
+    require(len({origin[k] for k in ("revision", "base", "head")}) == 3, "Ambiguous Git ancestry")
+    acceptance = origin["acceptance"]
+    exact(acceptance, "pull_request receipt_url receipt_sha256", "source acceptance locator")
+    number = acceptance["pull_request"]
+    require(type(number) is int and number > 0, "Exact acceptance PR required")
+    require(
+        isinstance(acceptance["receipt_url"], str)
+        and re.fullmatch(
+            rf"https://github.com/gabned/agent-protocol/pull/{number}#issuecomment-[1-9][0-9]*",
+            acceptance["receipt_url"],
+        ),
+        "Canonical independent acceptance receipt required",
+    )
+    require(
+        isinstance(acceptance["receipt_sha256"], str)
+        and re.fullmatch(r"[0-9a-f]{64}", acceptance["receipt_sha256"]),
+        "Original acceptance receipt digest required",
+    )
+    return origin
+
+
+def verify_git_provenance(provenance, manifest, *, authenticate_origin):
+    """Integrity bound to a host capability, never to a candidate's JSON assertion.
+
+    The callback takes no candidate input. Its accepted origin must already have
+    been independently authenticated under predecessor/local change control.
+    Offline hosts may restore that authority from their accepted enrollment/pin.
+    """
+    exact(provenance, "schema origin commits", "Git provenance")
+    require(provenance["schema"] == "agent-protocol-git-provenance/v1", "Unknown Git proof")
+    require(callable(authenticate_origin), "Independent source authentication capability required")
+    origin = validate_git_origin(provenance["origin"])
+    require(origin == authenticate_origin(), "Git origin differs from independent host authority")
+    validate_inventory(manifest, hashlib.sha256(canonical(manifest)).hexdigest())
+    require(manifest["revision"] == origin["revision"], "Git proof/source revision mismatch")
+    require(_git_tree(manifest) == origin["tree"], "Incomplete or altered canonical Git tree")
+    commits = provenance["commits"]
+    require(
+        isinstance(commits, list) and 2 <= len(commits) <= 10000, "Complete Git ancestry required"
+    )
+    previous, seen, head_tree = origin["base"], set(), None
+    for index, row in enumerate(commits):
+        exact(row, "revision object", "original Git commit")
+        revision = sha(row["revision"])
+        require(revision not in seen and revision != origin["base"], "Duplicate Git ancestry")
+        seen.add(revision)
+        require(
+            isinstance(row["object"], str) and len(row["object"]) <= 2**20, "Invalid Git object"
+        )
+        try:
+            data = base64.b64decode(row["object"], validate=True)
+        except (ValueError, TypeError) as error:
+            raise ValueError("Invalid original Git commit encoding") from error
+        require(
+            hashlib.sha1(b"commit " + str(len(data)).encode() + b"\0" + data).hexdigest()
+            == revision,
+            "Original Git commit identity differs",
+        )
+        headers, separator, _message = data.partition(b"\n\n")
+        require(separator, "Incomplete original Git commit")
+        lines = headers.split(b"\n")
+        trees = [line[5:].decode("ascii") for line in lines if line.startswith(b"tree ")]
+        parents = [line[7:].decode("ascii") for line in lines if line.startswith(b"parent ")]
+        require(len(trees) == 1, "Ambiguous commit tree")
+        sha(trees[0])
+        for parent in parents:
+            sha(parent)
+        final = index == len(commits) - 1
+        if final:
+            require(
+                revision == origin["revision"]
+                and previous == origin["head"]
+                and parents == [origin["base"], origin["head"]]
+                and trees[0] == head_tree == origin["tree"],
+                "Accepted normal merge identity/parents/tree differ",
+            )
+        else:
+            require(parents == [previous], "Source branch must retain its complete linear ancestry")
+            previous, head_tree = revision, trees[0]
+    return {
+        "result": "BYTES_VERIFIED",
+        "kind": "CANONICAL_GIT",
+        "revision": origin["revision"],
+        "tree": origin["tree"],
+        "origin_digest": hashlib.sha256(canonical(origin)).hexdigest(),
+        "authority": "REQUIRES_INDEPENDENTLY_AUTHENTICATED_HOST_CONTEXT",
+    }
+
+
+def git_provenance(repository, origin, *, authenticate_origin):
+    """Observe original committed objects only; do not execute acquired source."""
+    validate_git_origin(origin)
+    require(callable(authenticate_origin), "Independent source authentication capability required")
+    require(origin == authenticate_origin(), "Git origin differs from independent host authority")
+    command = ["git", "--no-replace-objects", "-C", str(repository)]
+
+    def git(*args):
+        return subprocess.check_output([*command, *args])
+
+    require(
+        git("rev-parse", "--is-shallow-repository").strip() == b"false",
+        "Full source history required",
+    )
+    grafts = Path(
+        git("rev-parse", "--path-format=absolute", "--git-path", "info/grafts").decode().strip()
+    )
+    require(
+        not grafts.exists() and not git("for-each-ref", "refs/replace/").strip(),
+        "Replaced source history refused",
+    )
+    manifest = git_inventory(repository, origin["revision"])
+    registry = json.loads(
+        git("show", origin["revision"] + ":.github/agent-protocol/bootstrap.json")
+    )
+    require(
+        {row["path"]: row["mode"] for row in manifest["files"]} == registry["modes"]
+        and set(registry["paths"]) == set(registry["modes"]),
+        "Complete registered canonical inventory required",
+    )
+    revisions = (
+        git("rev-list", "--reverse", "--topo-order", origin["revision"], "^" + origin["base"])
+        .decode()
+        .splitlines()
+    )
+    proof = {
+        "schema": "agent-protocol-git-provenance/v1",
+        "origin": origin,
+        "commits": [
+            {
+                "revision": revision,
+                "object": base64.b64encode(git("cat-file", "commit", revision)).decode(),
+            }
+            for revision in revisions
+        ],
+    }
+    verify_git_provenance(proof, manifest, authenticate_origin=authenticate_origin)
+    return proof, manifest
+
+
+def acquire_git_source(repository, directory, origin, *, authenticate_origin):
+    """Build a deterministic cache from authenticated immutable Git objects.
+
+    The authorized CLI/Work adapter selects authenticate_origin from independently
+    accepted local change control. This API does not enroll an origin, update a
+    consumer pin, publish artifacts or complete adoption.
+    """
+    proof, manifest = git_provenance(repository, origin, authenticate_origin=authenticate_origin)
+    # Load only this installed, accepted packager, never one from acquired source.
+    spec = importlib.util.spec_from_file_location(
+        "agent_protocol_packager", ROOT / "tools/package.py"
+    )
+    packager = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(packager)
+    files = packager.committed_files(repository, origin["revision"])
+    require(
+        packager.source_manifest(files, origin["revision"]) == manifest,
+        "Independent inventories differ",
+    )
+    artifacts = {
+        "source.tar.gz": packager.source_bytes(files, origin["revision"]),
+        packager.NAME: packager.wheel_bytes(files),
+        "source-manifest.json": (json.dumps(manifest, indent=2) + "\n").encode(),
+        "git-provenance.json": (json.dumps(proof, indent=2) + "\n").encode(),
+    }
+    artifacts["SHA256SUMS"] = "".join(
+        hashlib.sha256(data).hexdigest() + "  " + name + "\n"
+        for name, data in sorted(artifacts.items())
+    ).encode()
+    directory = Path(directory).absolute()
+    require(
+        not any(p.is_symlink() for p in (directory, *directory.parents)), "Cache symlink refused"
+    )
+    if directory.exists():
+        require(
+            directory.is_dir() and {p.name for p in directory.iterdir()} == set(artifacts),
+            "Incomplete or unmanaged Git cache preserved",
+        )
+        for name, data in artifacts.items():
+            path = directory / name
+            require(
+                path.is_file() and not path.is_symlink() and path.read_bytes() == data,
+                "Altered Git cache preserved",
+            )
+    else:
+        # Exclusive creation. An uncertain/partial write is preserved for diagnosis.
+        directory.mkdir(parents=True, exist_ok=False)
+        for name, data in artifacts.items():
+            with (directory / name).open("xb") as stream:
+                stream.write(data)
+    return {
+        "schema": "agent-protocol-source-bundle/v2",
+        "kind": "CANONICAL_GIT",
+        "archive_path": str(directory / "source.tar.gz"),
+        "archive_sha256": hashlib.sha256(artifacts["source.tar.gz"]).hexdigest(),
+        "manifest": manifest,
+        "manifest_digest": hashlib.sha256(canonical(manifest)).hexdigest(),
+        "provenance": proof,
+    }
+
+
+def authenticate_git_origin(origin, *, fetch_json):
+    """Authenticate an enrolled acceptance against independent canonical host reads.
+
+    fetch_json is the host's authenticated read capability (native HTTPS/CLI or
+    Work connector). Candidate JSON cannot install this capability or author an
+    OWNER acceptance in the canonical repository.
+    """
+    validate_git_origin(origin)
+    require(callable(fetch_json), "Authenticated canonical read capability required")
+    api = "https://api.github.com/repos/gabned/agent-protocol"
+    repository = fetch_json(api)
+    require(
+        repository["id"] == origin["repository_id"]
+        and repository["full_name"] == origin["repository"],
+        "Authenticated canonical repository differs",
+    )
+    number = origin["acceptance"]["pull_request"]
+    pr = fetch_json(f"{api}/pulls/{number}")
+    require(
+        pr["number"] == number
+        and pr["merged"] is True
+        and pr["merge_commit_sha"] == origin["revision"]
+        and pr["base"]["repo"]["id"] == repository["id"],
+        "Canonical source has not been independently merged",
+    )
+    commit = fetch_json(f"{api}/git/commits/{origin['revision']}")
+    require(
+        commit["sha"] == origin["revision"]
+        and commit["tree"]["sha"] == origin["tree"]
+        and [p["sha"] for p in commit["parents"]] == [origin["base"], origin["head"]],
+        "Authenticated canonical commit/tree/parents differ",
+    )
+    comment_id = origin["acceptance"]["receipt_url"].rsplit("-", 1)[-1]
+    receipt = fetch_json(f"{api}/issues/comments/{comment_id}")
+    body = receipt["body"]
+    require(
+        receipt["html_url"] == origin["acceptance"]["receipt_url"]
+        and receipt["issue_url"] == f"{api}/issues/{number}"
+        and receipt["author_association"] == "OWNER"
+        and receipt["user"]["id"] == repository["owner"]["id"]
+        and hashlib.sha256(body.encode()).hexdigest() == origin["acceptance"]["receipt_sha256"],
+        "Original independent OWNER acceptance differs",
+    )
+    blocks = re.findall(r"```json\n(.*?)\n```", body, re.DOTALL)
+    require(len(blocks) == 1, "Unambiguous versioned source acceptance required")
+    acceptance = json.loads(blocks[0])
+    exact(
+        acceptance,
+        "schema repository repository_id revision tree base head pull_request gates",
+        "independent source acceptance",
+    )
+    require(
+        acceptance["schema"] == "agent-protocol-source-acceptance/v1"
+        and all(
+            acceptance[k] == origin[k]
+            for k in ("repository", "repository_id", "revision", "tree", "base", "head")
+        )
+        and acceptance["pull_request"] == number,
+        "Independent acceptance selects another source",
+    )
+    gates = acceptance["gates"]
+    exact(gates, "predecessor_scope linux windows reviews post_merge", "source acceptance gates")
+    require(all(value == "PASS" for value in gates.values()), "Source acceptance is incomplete")
+    ancestry = fetch_json(f"{api}/compare/{origin['revision']}...{repository['default_branch']}")
+    require(
+        ancestry["status"] in {"identical", "ahead"}
+        and ancestry["merge_base_commit"]["sha"] == origin["revision"],
+        "Accepted source is outside canonical default ancestry",
+    )
+    return origin

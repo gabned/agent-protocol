@@ -72,5 +72,303 @@ class SourceTests(unittest.TestCase):
                 )
 
 
+def git_fixture():
+    import base64
+
+    from agent_protocol.source import _git_tree
+
+    content, manifest = fixture()
+    tree = _git_tree(manifest)
+    base = "1" * 40
+    identity = (
+        "author Synthetic <test@example.invalid> 0 +0000\n"
+        "committer Synthetic <test@example.invalid> 0 +0000\n"
+    )
+    head_data = (f"tree {tree}\nparent {base}\n" + identity + "\nhead\n").encode()
+    head = hashlib.sha1(b"commit " + str(len(head_data)).encode() + b"\0" + head_data).hexdigest()
+    merge_data = (f"tree {tree}\nparent {base}\nparent {head}\n" + identity + "\nmerge\n").encode()
+    revision = hashlib.sha1(
+        b"commit " + str(len(merge_data)).encode() + b"\0" + merge_data
+    ).hexdigest()
+    manifest["revision"] = revision
+    origin = {
+        "schema": "agent-protocol-git-origin/v1",
+        "repository": manifest["repository"],
+        "repository_id": manifest["repository_id"],
+        "revision": revision,
+        "tree": tree,
+        "base": base,
+        "head": head,
+        "acceptance": {
+            "pull_request": 1,
+            "receipt_url": "https://github.com/gabned/agent-protocol/pull/1#issuecomment-1",
+            "receipt_sha256": "2" * 64,
+        },
+    }
+    proof = {
+        "schema": "agent-protocol-git-provenance/v1",
+        "origin": origin,
+        "commits": [
+            {"revision": sha, "object": base64.b64encode(data).decode()}
+            for sha, data in ((head, head_data), (revision, merge_data))
+        ],
+    }
+    return content, manifest, proof
+
+
+class GitSourceTests(unittest.TestCase):
+    def test_online_acceptance_requires_canonical_owner_merge_gates_and_default_ancestry(self):
+        import json
+
+        from agent_protocol.source import authenticate_git_origin
+
+        _content, _manifest, proof = git_fixture()
+        origin = copy.deepcopy(proof["origin"])
+        acceptance = {
+            "schema": "agent-protocol-source-acceptance/v1",
+            **{
+                k: origin[k]
+                for k in ("repository", "repository_id", "revision", "tree", "base", "head")
+            },
+            "pull_request": 1,
+            "gates": dict.fromkeys(
+                ("predecessor_scope", "linux", "windows", "reviews", "post_merge"), "PASS"
+            ),
+        }
+        body = "Independent source acceptance\n\n```json\n" + json.dumps(acceptance) + "\n```"
+        origin["acceptance"]["receipt_sha256"] = hashlib.sha256(body.encode()).hexdigest()
+        api = "https://api.github.com/repos/gabned/agent-protocol"
+        observations = {
+            api: {
+                "id": 1393711644,
+                "full_name": "gabned/agent-protocol",
+                "owner": {"id": 42},
+                "default_branch": "main",
+            },
+            api + "/pulls/1": {
+                "number": 1,
+                "merged": True,
+                "merge_commit_sha": origin["revision"],
+                "head": {"sha": origin["head"], "repo": {"id": 1393711644}},
+                "base": {"repo": {"id": 1393711644}},
+            },
+            api + "/git/commits/" + origin["revision"]: {
+                "sha": origin["revision"],
+                "tree": {"sha": origin["tree"]},
+                "parents": [{"sha": origin["base"]}, {"sha": origin["head"]}],
+            },
+            api + "/issues/comments/1": {
+                "body": body,
+                "html_url": origin["acceptance"]["receipt_url"],
+                "issue_url": api + "/issues/1",
+                "author_association": "OWNER",
+                "user": {"id": 42},
+            },
+            api + "/compare/" + origin["revision"] + "...main": {
+                "status": "identical",
+                "merge_base_commit": {"sha": origin["revision"]},
+            },
+        }
+        self.assertEqual(
+            authenticate_git_origin(origin, fetch_json=observations.__getitem__), origin
+        )
+        # A closed PR's live branch may advance or disappear. The authenticated
+        # merge parents and retained acceptance identify the reviewed source.
+        advanced = copy.deepcopy(observations)
+        advanced[api + "/pulls/1"]["head"] = {"sha": "f" * 40, "repo": None}
+        self.assertEqual(
+            authenticate_git_origin(origin, fetch_json=advanced.__getitem__), origin
+        )
+        for attack in ("repository", "unmerged", "owner", "receipt", "ancestry"):
+            data = copy.deepcopy(observations)
+            if attack == "repository":
+                data[api]["id"] += 1
+            elif attack == "unmerged":
+                data[api + "/pulls/1"]["merged"] = False
+            elif attack == "owner":
+                data[api + "/issues/comments/1"]["user"]["id"] += 1
+            elif attack == "receipt":
+                data[api + "/issues/comments/1"]["body"] += "altered"
+            else:
+                data[api + "/compare/" + origin["revision"] + "...main"]["status"] = "diverged"
+            with self.subTest(attack=attack), self.assertRaises(ValueError):
+                authenticate_git_origin(origin, fetch_json=data.__getitem__)
+
+    def test_malformed_source_and_host_enrollment_fail_before_host_effects(self):
+        from agent_protocol.host import NativeGitHubHost
+        from agent_protocol.source import verify_installation
+
+        for malformed in (None, [], "candidate-selected"):
+            with self.subTest(value=malformed), self.assertRaises(ValueError):
+                verify_installation(malformed, revision="a" * 40)
+            with self.subTest(value=malformed), self.assertRaises(ValueError):
+                NativeGitHubHost(malformed)
+
+    def test_original_commit_graph_and_complete_tree_verify_without_git(self):
+        from unittest.mock import patch
+
+        from agent_protocol.source import verify_git_provenance
+
+        _content, manifest, proof = git_fixture()
+        authority = copy.deepcopy(proof["origin"])
+        with patch("subprocess.check_output", side_effect=AssertionError("offline")):
+            result = verify_git_provenance(proof, manifest, authenticate_origin=lambda: authority)
+        self.assertEqual(result["result"], "BYTES_VERIFIED")
+        self.assertEqual(result["tree"], authority["tree"])
+        self.assertEqual(result["kind"], "CANONICAL_GIT")
+
+    def test_json_and_self_digests_do_not_enroll_source_or_allow_ambiguous_history(self):
+        from agent_protocol.source import verify_git_provenance
+
+        _content, original_manifest, original = git_fixture()
+        authority = copy.deepcopy(original["origin"])
+        with self.assertRaisesRegex(ValueError, "authentication capability"):
+            verify_git_provenance(original, original_manifest, authenticate_origin=None)
+        for attack in (
+            "repository",
+            "tree",
+            "base",
+            "head",
+            "receipt",
+            "commit",
+            "missing",
+            "extra",
+            "order",
+            "incomplete-tree",
+            "mode",
+        ):
+            proof, manifest = copy.deepcopy(original), copy.deepcopy(original_manifest)
+            if attack == "repository":
+                proof["origin"]["repository_id"] += 1
+            elif attack in {"tree", "base", "head"}:
+                proof["origin"][attack] = "f" * 40
+            elif attack == "receipt":
+                proof["origin"]["acceptance"]["receipt_sha256"] = "f" * 64
+            elif attack == "commit":
+                proof["commits"][0]["object"] += "AAAA"
+            elif attack == "missing":
+                proof["commits"].pop(0)
+            elif attack == "extra":
+                proof["commits"].insert(0, copy.deepcopy(proof["commits"][0]))
+            elif attack == "order":
+                proof["commits"].reverse()
+            elif attack == "incomplete-tree":
+                manifest["files"][0]["path"] = "other.py"
+            else:
+                manifest["files"][0]["mode"] = "100755"
+            with self.subTest(attack=attack), self.assertRaises(ValueError):
+                verify_git_provenance(proof, manifest, authenticate_origin=lambda: authority)
+
+    def test_real_acquisition_independent_rebuild_offline_install_and_cache_preservation(self):
+        import json
+        import subprocess
+        from unittest.mock import patch
+
+        from agent_protocol.source import acquire_git_source, verify_installation
+
+        with tempfile.TemporaryDirectory(prefix="protocol-git-source-") as temporary:
+            root = Path(temporary) / "source"
+            root.mkdir()
+
+            def git(*args, input=None):
+                return (
+                    subprocess.check_output(
+                        [
+                            "git",
+                            "-c",
+                            "user.name=Synthetic",
+                            "-c",
+                            "user.email=test@example.invalid",
+                            "-C",
+                            str(root),
+                            *args,
+                        ],
+                        input=input,
+                        stderr=subprocess.PIPE,
+                    )
+                    .decode()
+                    .strip()
+                )
+
+            git("init", "--initial-branch=main")
+            (root / "src").mkdir()
+            (root / "src/example.py").write_bytes(b"base\n")
+            registry_dir = root / ".github/agent-protocol"
+            registry_dir.mkdir(parents=True)
+            paths = [".github/agent-protocol/bootstrap.json", "src/example.py"]
+            (registry_dir / "bootstrap.json").write_text(
+                json.dumps({"paths": paths, "modes": dict.fromkeys(paths, "100644")}),
+                encoding="utf-8",
+            )
+            git("add", ".")
+            git("commit", "-m", "base")
+            base = git("rev-parse", "HEAD")
+            (root / "src/example.py").write_bytes(b"accepted source\n")
+            git("add", ".")
+            git("commit", "-m", "source")
+            head, tree = git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
+            revision = git("commit-tree", tree, "-p", base, "-p", head, input=b"normal merge\n")
+            git("update-ref", "refs/heads/main", revision)
+            _data, _manifest, synthetic = git_fixture()
+            origin = {
+                **synthetic["origin"],
+                "revision": revision,
+                "tree": tree,
+                "base": base,
+                "head": head,
+            }
+            authority = copy.deepcopy(origin)
+            output = Path(temporary) / "first"
+            first = acquire_git_source(root, output, origin, authenticate_origin=lambda: authority)
+            clone = Path(temporary) / "independent"
+            subprocess.check_output(
+                ["git", "clone", "--no-local", str(root), str(clone)], stderr=subprocess.PIPE
+            )
+            second_dir = Path(temporary) / "second"
+            second = acquire_git_source(
+                clone, second_dir, origin, authenticate_origin=lambda: authority
+            )
+            self.assertEqual(first["manifest"], second["manifest"])
+            self.assertEqual(
+                {p.name: p.read_bytes() for p in output.iterdir()},
+                {p.name: p.read_bytes() for p in second_dir.iterdir()},
+            )
+            with patch("subprocess.check_output", side_effect=AssertionError("offline")):
+                checked = verify_installation(
+                    first,
+                    revision=revision,
+                    distribution_root=root,
+                    source_root=root / "src",
+                    authenticate_origin=lambda: authority,
+                )
+            self.assertEqual(checked["kind"], "CANONICAL_GIT")
+            with self.assertRaisesRegex(ValueError, "authentication capability"):
+                verify_installation(
+                    first, revision=revision, distribution_root=root, source_root=root / "src"
+                )
+            with self.assertRaisesRegex(ValueError, "independent host authority"):
+                verify_installation(
+                    first,
+                    revision=revision,
+                    distribution_root=root,
+                    source_root=root / "src",
+                    authenticate_origin=lambda: {**authority, "tree": "f" * 40},
+                )
+            self.assertEqual(
+                acquire_git_source(root, output, origin, authenticate_origin=lambda: authority),
+                first,
+            )
+            damaged = output / "source.tar.gz"
+            damaged.write_bytes(b"original corrupt cache")
+            with self.assertRaisesRegex(ValueError, "Altered Git cache preserved"):
+                acquire_git_source(root, output, origin, authenticate_origin=lambda: authority)
+            self.assertEqual(damaged.read_bytes(), b"original corrupt cache")
+            git("replace", head, base)
+            with self.assertRaisesRegex(ValueError, "Replaced source history"):
+                acquire_git_source(
+                    root, Path(temporary) / "refused", origin, authenticate_origin=lambda: authority
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

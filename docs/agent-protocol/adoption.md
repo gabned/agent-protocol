@@ -1,7 +1,9 @@
 # Native adoption and migration
 
-Select source repository, immutable revision, release inventory and provenance
-through the accepted predecessor/local change-control. Verify canonical bytes,
+Select source repository, immutable revision, acquisition kind, complete inventory
+and provenance through accepted predecessor/local change-control.
+PUBLISHED_RELEASE and CANONICAL_GIT are distinct official acquisition routes.
+Canonical Git adoption does not require an SDK release to be published. Verify canonical bytes,
 Git/archive modes and source identity. Consumer copies are byte-identical vendor
 dependencies; modify native adapters outside them. Do not create a local Core fork
 or replace the product's own Core. Wrapper locations follow the native runtime.
@@ -56,3 +58,51 @@ insufficient. The offline JSON CLI cannot install an authentication callback and
 cannot turn supplied completion claims into COMPLETE. Legacy receipts require their
 original accepted verifier and a separately qualified host migration; hashing them
 does not reinterpret their schema or create a signed v2 journal.
+
+## Canonical Git acquisition
+
+The accepted host authenticates the stable canonical repository ID, full revision,
+root tree, accepted predecessor, reviewed source head and actual normal merge,
+plus the original independent source acceptance receipt. It then enrolls an
+`agent-protocol-git-origin/v1` under predecessor/local change control. An editable
+pin, a matching JSON document, a Git remote URL or a self-produced digest cannot
+establish that authority. The new rule itself must first pass the accepted
+predecessor's scope, native, CI, review and normal-merge gates; it cannot authorize
+its own adoption. Frozen gate changes retain the separate predecessor-transfer rule.
+
+`agent_protocol.source.acquire_git_source` is shared by native CLI and Work
+adapters. Its no-argument `authenticate_origin` host capability supplies the
+independently authenticated origin, separately from acquired material. Acquire
+full canonical Git history without replacements, grafts or shallow boundaries.
+Retain original commit objects from the accepted base through the complete linear
+reviewed branch and actual two-parent merge. Verify the entire registered file,
+mode, Git blob and SHA-256 inventory against the authenticated root tree before
+using any source bytes. The installed accepted packager, outside acquired source,
+produces deterministic source, wheel, manifest, Git proof and checksum artifacts.
+
+The Git cache is separate from published-release assets and keyed by full source
+revision. It preserves and refuses partial, altered or unmanaged prior content.
+Independent acquisition/rebuild must produce identical payloads. Offline
+`verify_installation` with explicit `agent-protocol-source-bundle/v2` checks the
+original commit identities/ordered ancestry, complete root tree, archive modes
+and every installed byte against the independently enrolled origin. It needs
+neither Git nor GitHub. Application runtime has no new source-acquisition dependency.
+
+A new consumer pin explicitly selects CANONICAL_GIT; historical release pins,
+four-field source bundles, receipt schemas, artifact inventories and validators
+keep their original meaning. Local adapters must preserve both routes, make
+operational and Work pins agree and qualify native entrypoints, event guards,
+online acquisition, repeat acquisition, offline checks and all supported platforms.
+A changed pin, cache or vendor tree does not complete rollout. Each repository
+retains its owner, PRODUCT policy and actual acceptance/readback evidence.
+
+Online adapters use the shared `authenticate_git_origin` with their authenticated
+read capability. It checks canonical numeric identity, actual merged PR/head,
+ordered commit parents/tree, original OWNER receipt and default ancestry. New
+machine-readable source acceptance uses `agent-protocol-source-acceptance/v1`
+in the independent canonical OWNER receipt after predecessor, Linux, Windows,
+review and post-merge gates pass. The receipt is external to the accepted source,
+so it does not contain its own URL/digest. Historical receipts keep their original
+validators and are not reinterpreted as this schema. Fresh online authentication
+is retained separately; offline verification uses the previously independently
+accepted consumer pin or enrollment, never an unaccepted candidate assertion.

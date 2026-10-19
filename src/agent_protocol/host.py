@@ -568,16 +568,33 @@ class NativeGitHubHost:
     """
 
     def __init__(self, enrollment, *, api=None, collect_raw=None):
+        require(isinstance(enrollment, dict), "Host enrollment must be an object")
+        schema = enrollment.get("schema")
+        require(
+            schema in {"agent-host-enrollment/v1", "agent-host-enrollment/v2"},
+            "Unknown host enrollment",
+        )
+        git_source = schema == "agent-host-enrollment/v2"
         exact(
             enrollment,
             "schema identity authority account profile_revision profile_path "
-            "profile_blob journal_directory required_ancestor public_signers source_bundle",
+            "profile_blob journal_directory required_ancestor public_signers source_bundle"
+            + (" source_origin" if git_source else ""),
             "host enrollment",
         )
-        require(enrollment["schema"] == "agent-host-enrollment/v1", "Unknown host enrollment")
+        if git_source:
+            require(
+                isinstance(enrollment["source_bundle"], dict)
+                and enrollment["source_bundle"].get("schema") == "agent-protocol-source-bundle/v2",
+                "Git enrollment requires explicit Git source bundle",
+            )
         self.binding = deepcopy(enrollment)
         self.source_receipt = verify_installation(
-            enrollment["source_bundle"], revision=enrollment["authority"]["pin"]
+            enrollment["source_bundle"],
+            revision=enrollment["authority"]["pin"],
+            authenticate_origin=(lambda: deepcopy(self.binding["source_origin"]))
+            if git_source
+            else None,
         )
         self.identity = enrollment["identity"]
         validate_identity(self.identity)
@@ -803,7 +820,8 @@ class NativeGitHubHost:
             and pr["base"]["repo"]["id"] == identity["repository_id"]
             and pr["base"]["repo"]["full_name"] == identity["repository"]
             and (
-                merged or recovery
+                merged
+                or recovery
                 or pr["base"]["ref"]
                 == collection["preflight"]["repo"]["response"]["default_branch"]
             ),

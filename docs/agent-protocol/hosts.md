@@ -72,8 +72,8 @@ candidate checkouts. It has schema `agent-host-enrollment/v1` and contains:
   selected under predecessor change control, never a file from the PR;
 - `journal_directory`, `required_ancestor`, `public_signers`: isolated operator
   Git directory, independently retained recovery anchor and approved public keys;
-- `source_bundle`: original source archive path/digest and exact release manifest/digest,
-  selected from the authenticated release. Installed bytes and archive modes are
+- `source_bundle`: original source archive path/digest and exact source manifest/digest,
+  selected from an authenticated release or independently accepted canonical Git source. Installed bytes and archive modes are
   checked against this artifact, including Windows and wheel installations.
 
 These fields do not enroll themselves. The authorized native adapter or operator
@@ -119,3 +119,14 @@ Live production conditions are checked again immediately before dispatch. Reopen
 a host after integration can read the accepted profile from verified default-branch
 ancestry, while reconciliation checks the exact original merge parents/tree and
 post-merge CI separately. A previous head's CI cannot close the lifecycle.
+
+## Enrolled canonical Git source
+
+An independently approved `agent-host-enrollment/v2` adds `source_origin` and
+selects the explicit CANONICAL_GIT source bundle. Version 1 enrollment and release
+bundles remain unchanged. Enrollment is installed outside candidate checkouts
+only after the source acceptance and consumer change-control have been independently
+authenticated; writing that JSON does not enroll itself. Native CLI and Work
+construct the same host and use the same source verifier. Source acquisition
+and PR-local adoption do not require activating Lifecycle v2 or enrolling signers;
+an already active signed journal retains its original supported route.
